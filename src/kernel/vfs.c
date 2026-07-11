@@ -1,6 +1,6 @@
 #include <kernel/vfs.h>
 #include <kernel/string.h>
-#include <drivers/vga.h>
+#include <drivers/console.h>
 
 static vfs_node_t nodes[VFS_MAX_FILES];
 static int        node_count;
@@ -8,21 +8,19 @@ static int        node_count;
 /* Global open-file table (kernel-wide); process maps user fd -> index */
 static vfs_file_t open_files[VFS_MAX_FILES * 2];
 
-static ssize_t console_write(vfs_node_t *node, const void *buf, size_t count, off_t off)
+static ssize_t console_dev_write(vfs_node_t *node, const void *buf, size_t count, off_t off)
 {
     (void)node;
     (void)off;
-    vga_write((const char *)buf, count);
+    console_write((const char *)buf, count);
     return (ssize_t)count;
 }
 
-static ssize_t console_read(vfs_node_t *node, void *buf, size_t count, off_t off)
+static ssize_t console_dev_read(vfs_node_t *node, void *buf, size_t count, off_t off)
 {
     (void)node;
-    (void)buf;
-    (void)count;
     (void)off;
-    return 0; /* no keyboard yet */
+    return console_read(buf, count);
 }
 
 static vfs_node_t *find_node(const char *path)
@@ -53,7 +51,7 @@ void vfs_init(void)
     memset(open_files, 0, sizeof(open_files));
     node_count = 0;
 
-    vfs_register_device("dev/console", console_read, console_write);
+    vfs_register_device("dev/console", console_dev_read, console_dev_write);
 
     static const char motd[] = "welcome to mykernel\n";
     static const char hello[] = "PING\nPONG\n";

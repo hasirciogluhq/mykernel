@@ -1,4 +1,5 @@
 #include <arch/x86/idt.h>
+#include <arch/x86/gdt.h>
 #include <kernel/types.h>
 
 struct idt_entry {
@@ -36,8 +37,8 @@ void idt_init(void)
     for (int i = 0; i < 256; i++)
         idt_set_gate((uint8_t)i, 0, 0, 0);
 
-    /* 0x08 = kernel code segment (Multiboot flat GDT), 0x8E = present | ring0 | 32-bit interrupt gate */
-    idt_set_gate(0x80, (uint32_t)isr_syscall, 0x08, 0x8E);
+    /* 0xEE = present | DPL3 | 32-bit interrupt gate (userspace int 0x80) */
+    idt_set_gate(0x80, (uint32_t)isr_syscall, GDT_KERNEL_CODE, 0xEE);
 
     __asm__ volatile("lidt %0" : : "m"(idtp));
 }

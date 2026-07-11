@@ -1,5 +1,6 @@
 #include <kernel/scheduler.h>
 #include <kernel/process.h>
+#include <arch/x86/gdt.h>
 
 static uint32_t *bootstrap_esp;
 
@@ -53,10 +54,12 @@ void schedule(void)
 
     if (cur == next) {
         process_set_current(next);
+        gdt_set_kernel_stack(next->kstack_top);
         return;
     }
 
     process_set_current(next);
+    gdt_set_kernel_stack(next->kstack_top);
 
     if (cur)
         context_switch(&cur->esp, next->esp);

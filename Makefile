@@ -16,25 +16,33 @@ CFLAGS  := -std=c11 -ffreestanding -m32 -Wall -Wextra -Werror \
            -I$(INC)
 LDFLAGS := -m elf_i386 -n -T linker.ld -nostdlib
 
-# --- sources by layer ---
 ARCH_ASM := $(SRC)/arch/x86/boot.asm \
             $(SRC)/arch/x86/switch.asm \
-            $(SRC)/arch/x86/isr.asm
+            $(SRC)/arch/x86/isr.asm \
+            $(SRC)/arch/x86/gdt_flush.asm \
+            $(SRC)/arch/x86/usermode.asm
 
-ARCH_C   := $(SRC)/arch/x86/idt.c
+ARCH_C   := $(SRC)/arch/x86/idt.c \
+            $(SRC)/arch/x86/gdt.c
 
 KERNEL_C := $(SRC)/kernel/main.c \
             $(SRC)/kernel/process.c \
             $(SRC)/kernel/scheduler.c \
             $(SRC)/kernel/syscall.c \
-            $(SRC)/kernel/vfs.c
+            $(SRC)/kernel/vfs.c \
+            $(SRC)/kernel/shell.c
+
+USER_C   := $(SRC)/user/ping.c \
+            $(SRC)/user/pong.c
 
 LIB_C    := $(SRC)/lib/string.c
 
-DRV_C    := $(SRC)/drivers/vga.c
+DRV_C    := $(SRC)/drivers/vga.c \
+            $(SRC)/drivers/keyboard.c \
+            $(SRC)/drivers/console.c
 
 ASM_SRCS := $(ARCH_ASM)
-C_SRCS   := $(ARCH_C) $(KERNEL_C) $(LIB_C) $(DRV_C)
+C_SRCS   := $(ARCH_C) $(KERNEL_C) $(USER_C) $(LIB_C) $(DRV_C)
 
 ASM_OBJS := $(patsubst $(SRC)/%.asm,$(BUILD)/%.o,$(ASM_SRCS))
 C_OBJS   := $(patsubst $(SRC)/%.c,$(BUILD)/%.o,$(C_SRCS))
@@ -57,7 +65,7 @@ $(BUILD)/%.o: $(SRC)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: $(TARGET)
-	$(QEMU) -kernel $<
+	$(QEMU) -kernel $< -serial stdio
 
 clean:
 	rm -rf $(BUILD)

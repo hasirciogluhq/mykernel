@@ -15,6 +15,7 @@ typedef uint32_t size_t;
 typedef int32_t  ssize_t;
 typedef int32_t  pid_t;
 typedef int32_t  off_t;
+typedef uint32_t uintptr_t;
 
 #define NULL ((void *)0)
 
