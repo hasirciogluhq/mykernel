@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "QEMU mykernel",
+      "type": "lldb",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "program": "${workspaceFolder}/build/kernel.bin",
+      "preLaunchTask": ""
+    },
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "/Users/hasircioglu/projects/mykernel/src",
+      "program": "/Users/hasircioglu/projects/mykernel/src/build/Debug/outDebug"
+    }
+  ]
+}

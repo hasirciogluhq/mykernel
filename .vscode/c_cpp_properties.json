@@ -1,0 +1,37 @@
+{
+  "configurations": [
+    {
+      "name": "mykernel-i386-freestanding",
+      "includePath": [
+        "${workspaceFolder}/include"
+      ],
+      "defines": [
+        "__i386__",
+        "__i386",
+        "__freestanding__"
+      ],
+      "compilerPath": "/opt/homebrew/opt/llvm/bin/clang",
+      "cStandard": "c11",
+      "intelliSenseMode": "linux-gcc-x86",
+      "compileCommands": "${workspaceFolder}/compile_commands.json",
+      "browse": {
+        "path": [
+          "${workspaceFolder}/include",
+          "${workspaceFolder}/src"
+        ],
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "compilerArgs": [
+        "--target=i386-none-elf",
+        "-std=c11",
+        "-ffreestanding",
+        "-fno-builtin",
+        "-fno-stack-protector",
+        "-fno-pic",
+        "-nostdlib",
+        "-I${workspaceFolder}/include"
+      ]
+    }
+  ],
+  "version": 4
+}

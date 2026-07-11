@@ -1,0 +1,16 @@
+CompileFlags:
+  Add:
+    - --target=i386-none-elf
+    - -std=c11
+    - -ffreestanding
+    - -fno-builtin
+    - -fno-stack-protector
+    - -fno-pic
+    - -nostdlib
+    - -I/Users/hasircioglu/projects/mykernel/include
+  Remove:
+    - -m32
+    - -m64
+
+Index:
+  Background: Build
