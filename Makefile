@@ -52,7 +52,9 @@ GFX_C    := $(SRC)/gfx/surface.c \
             $(SRC)/gfx/server.c
 
 USER_C   := $(SRC)/user/libgx.c \
-            $(SRC)/user/os-ui.c
+            $(SRC)/user/os-ui.c \
+            $(SRC)/user/terminal.c \
+            $(SRC)/user/notepad.c
 
 ASM_SRCS := $(ARCH_ASM)
 C_SRCS   := $(ARCH_C) $(KERNEL_C) $(LIB_C) $(DRV_C) $(GFX_C) $(USER_C)

@@ -1,11 +1,11 @@
 #include <multiboot.h>
 #include <drivers/vga.h>
+#include <drivers/fb.h>
 #include <kernel/heap.h>
-#include <kernel/process.h>
-#include <kernel/scheduler.h>
 #include <kernel/syscall.h>
 #include <kernel/vfs.h>
 #include <gfx/server.h>
+#include <gfx/color.h>
 #include <arch/x86/gdt.h>
 #include <arch/x86/idt.h>
 #include <user/gx.h>
@@ -28,8 +28,6 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     idt_init();
     syscall_init();
     vfs_init();
-    process_init();
-    scheduler_init();
 
     if (gx_server_init(mbi) < 0) {
         vga_print("gx_server_init failed\n");
@@ -37,11 +35,6 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
             __asm__ volatile("hlt");
     }
 
-    if (process_create_user("os-ui", user_os_ui_main) < 0) {
-        vga_print("os-ui spawn failed\n");
-        for (;;)
-            __asm__ volatile("hlt");
-    }
-
-    scheduler_start();
+    /* Desktop shell — runs on boot CPU path (ugx syscalls). Never returns. */
+    user_os_ui_main();
 }

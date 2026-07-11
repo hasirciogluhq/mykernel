@@ -94,12 +94,12 @@ void gx_compositor_set_wallpaper(gx_compositor *c, gx_surface *wp)
     if (!wp)
         return;
 
+    /* Soft copy for acrylic sampling — full box-blur on 800x600 freezes boot. */
     c->wallpaper_blurred = gx_surface_create(wp->width, wp->height);
     if (!c->wallpaper_blurred)
         return;
-
-    gx_accel_blit(c->wallpaper_blurred, 0, 0, wp);
-    gx_blur_box(c->wallpaper_blurred, 3);
+    memcpy(c->wallpaper_blurred->pixels, wp->pixels,
+           (size_t)wp->stride * wp->height * sizeof(gx_color));
 }
 
 int gx_compositor_add_layer(gx_compositor *c, gx_layer *desc)

@@ -67,7 +67,7 @@ void wm_shutdown(wm_t *wm)
 
 wm_window *wm_create(wm_t *wm, const wm_create_args *args, int owner_pid)
 {
-    if (!wm || !args || args->w < 32 || args->h < 32)
+    if (!wm || !args || args->w < 16 || args->h < 16)
         return NULL;
 
     wm_window *w = NULL;

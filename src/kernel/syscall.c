@@ -128,7 +128,7 @@ static long do_wm_create(long argp)
     const ugx_win_create *a = (const ugx_win_create *)argp;
     gx_server *s = gx_server_get();
     process_t *p = process_current();
-    if (!a || !s || !p)
+    if (!a || !s)
         return -1;
 
     wm_create_args wa;
@@ -141,7 +141,8 @@ static long do_wm_create(long argp)
     wa.radius = a->radius;
     strncpy(wa.title, a->title, WM_TITLE_MAX - 1);
 
-    wm_window *w = wm_create(&s->wm, &wa, p->pid);
+    /* owner_pid 0 = kernel / boot UI (no process context) */
+    wm_window *w = wm_create(&s->wm, &wa, p ? p->pid : 0);
     return w ? (long)w->id : -1;
 }
 
@@ -295,6 +296,23 @@ static long do_gx_damage(void)
     return 0;
 }
 
+static long do_wm_get_frame(long id, long outp)
+{
+    gx_server *s = gx_server_get();
+    ugx_frame *out = (ugx_frame *)outp;
+    wm_window *w;
+    if (!s || !out)
+        return -1;
+    w = wm_get(&s->wm, (int)id);
+    if (!w)
+        return -1;
+    out->x = w->frame.x;
+    out->y = w->frame.y;
+    out->w = w->frame.w;
+    out->h = w->frame.h;
+    return 0;
+}
+
 long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
 {
     (void)a4;
@@ -325,6 +343,7 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
     case SYS_INPUT_STATE:      return do_input_state(a1);
     case SYS_WM_POP_KEY:       return do_wm_pop_key(a1);
     case SYS_GX_DAMAGE:        return do_gx_damage();
+    case SYS_WM_GET_FRAME:     return do_wm_get_frame(a1, a2);
 
     default:         return -1;
     }

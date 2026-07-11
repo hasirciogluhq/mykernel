@@ -19,6 +19,7 @@
 #define SYS_INPUT_STATE      212
 #define SYS_WM_POP_KEY       213
 #define SYS_GX_DAMAGE        214
+#define SYS_WM_GET_FRAME     215
 
 #define UGX_STYLE_OPAQUE     0
 #define UGX_STYLE_ACRYLIC    (1u << 0)
@@ -44,6 +45,10 @@ typedef struct ugx_win_create {
     int32_t  radius;
     char     title[64];
 } ugx_win_create;
+
+typedef struct ugx_frame {
+    int32_t x, y, w, h;
+} ugx_frame;
 
 typedef struct ugx_map {
     uint32_t *pixels;
@@ -92,6 +97,7 @@ int  ugx_wm_move(int win, int x, int y);
 int  ugx_wm_resize(int win, int w, int h);
 int  ugx_wm_focus(int win);
 int  ugx_wm_show(int win, int visible);
+int  ugx_wm_get_frame(int win, ugx_frame *out);
 int  ugx_fill(int win, int x, int y, int w, int h, uint32_t color);
 int  ugx_fill_round(int win, int x, int y, int w, int h, int radius, uint32_t color);
 int  ugx_set_wallpaper(const uint32_t *pixels, uint32_t w, uint32_t h, uint32_t stride);

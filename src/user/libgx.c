@@ -72,6 +72,11 @@ int ugx_wm_show(int win, int visible)
     return (int)syscall2(SYS_WM_SHOW, win, visible);
 }
 
+int ugx_wm_get_frame(int win, ugx_frame *out)
+{
+    return (int)syscall2(SYS_WM_GET_FRAME, win, (long)out);
+}
+
 int ugx_fill(int win, int x, int y, int w, int h, uint32_t color)
 {
     ugx_fill_args args;
