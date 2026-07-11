@@ -2,8 +2,8 @@
 #include <arch/x86/io.h>
 #include <kernel/string.h>
 
-#define FB_DEFAULT_W   1024
-#define FB_DEFAULT_H   768
+#define FB_DEFAULT_W   800
+#define FB_DEFAULT_H   600
 #define FB_DEFAULT_BPP 32
 
 /* Bochs/QEMU Graphics Adapter (BGA) */
@@ -263,6 +263,36 @@ void fb_present(const uint32_t *src, uint32_t src_stride_px)
             for (uint32_t x = 0; x < fb.width; x++) {
                 uint32_t c = srow[x];
                 uint8_t *p = drow + x * 3;
+                p[0] = (uint8_t)(c & 0xFF);
+                p[1] = (uint8_t)((c >> 8) & 0xFF);
+                p[2] = (uint8_t)((c >> 16) & 0xFF);
+            }
+        }
+    }
+}
+
+void fb_present_rect(const uint32_t *src, uint32_t src_stride_px,
+                     uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    if (!fb.ready || !src || w == 0 || h == 0)
+        return;
+
+    if (x >= fb.width || y >= fb.height)
+        return;
+    if (x + w > fb.width)
+        w = fb.width - x;
+    if (y + h > fb.height)
+        h = fb.height - y;
+
+    for (uint32_t row = 0; row < h; row++) {
+        const uint32_t *srow = src + (y + row) * src_stride_px + x;
+        uint8_t *drow = fb.addr + (y + row) * fb.pitch + x * fb.bytes_per_pixel;
+        if (fb.bytes_per_pixel == 4) {
+            memcpy(drow, srow, w * 4);
+        } else {
+            for (uint32_t col = 0; col < w; col++) {
+                uint32_t c = srow[col];
+                uint8_t *p = drow + col * 3;
                 p[0] = (uint8_t)(c & 0xFF);
                 p[1] = (uint8_t)((c >> 8) & 0xFF);
                 p[2] = (uint8_t)((c >> 16) & 0xFF);

@@ -136,7 +136,7 @@ int process_kill(pid_t pid)
     if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
         return -1;
     if (!p->is_user)
-        return -1; /* don't kill kernel threads (shell) */
+        return -1; /* kernel threads only exit themselves */
     if (p == current)
         process_exit(137);
     p->state = PROC_ZOMBIE;

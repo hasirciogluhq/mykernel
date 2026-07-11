@@ -6,57 +6,17 @@
   },
   {
     "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/kernel/heap.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/kernel/heap.c"]
+    "file": "src/gfx/server.c",
+    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/server.c"]
   },
   {
     "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/drivers/fb.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/drivers/fb.c"]
+    "file": "src/user/init.c",
+    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/user/init.c"]
   },
   {
     "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/surface.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/surface.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/draw.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/draw.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/blur.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/blur.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/font.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/font.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/device.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/device.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/compositor.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/compositor.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/window.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/window.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/gfx/demo.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/gfx/demo.c"]
-  },
-  {
-    "directory": "/Users/hasircioglu/projects/mykernel",
-    "file": "src/drivers/vga.c",
-    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/drivers/vga.c"]
+    "file": "src/user/libgx.c",
+    "arguments": ["clang", "--target=i386-none-elf", "-std=c11", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic", "-nostdlib", "-I/Users/hasircioglu/projects/mykernel/include", "-c", "src/user/libgx.c"]
   }
 ]

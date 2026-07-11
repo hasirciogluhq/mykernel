@@ -12,8 +12,8 @@ align 4
     dd CHECKSUM
     ; video mode (present because VIDEO flag is set)
     dd 0        ; mode_type: 0 = linear graphics
-    dd 1024     ; width
-    dd 768      ; height
+    dd 800      ; width
+    dd 600      ; height
     dd 32       ; depth
 
 section .text

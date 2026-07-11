@@ -37,19 +37,25 @@ LIB_C    := $(SRC)/lib/string.c
 DRV_C    := $(SRC)/drivers/vga.c \
             $(SRC)/drivers/fb.c \
             $(SRC)/drivers/console.c \
-            $(SRC)/drivers/keyboard.c
+            $(SRC)/drivers/keyboard.c \
+            $(SRC)/drivers/ps2.c \
+            $(SRC)/drivers/mouse.c
 
 GFX_C    := $(SRC)/gfx/surface.c \
             $(SRC)/gfx/draw.c \
             $(SRC)/gfx/blur.c \
             $(SRC)/gfx/font.c \
             $(SRC)/gfx/device.c \
+            $(SRC)/gfx/accel.c \
             $(SRC)/gfx/compositor.c \
             $(SRC)/gfx/window.c \
-            $(SRC)/gfx/demo.c
+            $(SRC)/gfx/server.c
+
+USER_C   := $(SRC)/user/libgx.c \
+            $(SRC)/user/os-ui.c
 
 ASM_SRCS := $(ARCH_ASM)
-C_SRCS   := $(ARCH_C) $(KERNEL_C) $(LIB_C) $(DRV_C) $(GFX_C)
+C_SRCS   := $(ARCH_C) $(KERNEL_C) $(LIB_C) $(DRV_C) $(GFX_C) $(USER_C)
 
 ASM_OBJS := $(patsubst $(SRC)/%.asm,$(BUILD)/%.o,$(ASM_SRCS))
 C_OBJS   := $(patsubst $(SRC)/%.c,$(BUILD)/%.o,$(C_SRCS))

@@ -23,6 +23,7 @@ typedef struct gx_layer {
     uint8_t     opacity;   /* 0-255 */
     gx_color    tint;      /* for acrylic */
     int         blur_radius;
+    int32_t     corner_radius; /* 0 = sharp */
 } gx_layer;
 
 typedef struct gx_compositor {

@@ -22,5 +22,7 @@ void            fb_fill(uint32_t argb);
 void            fb_blit(uint32_t dx, uint32_t dy, const uint32_t *src,
                         uint32_t w, uint32_t h, uint32_t src_stride_px);
 void            fb_present(const uint32_t *src, uint32_t src_stride_px);
+void            fb_present_rect(const uint32_t *src, uint32_t src_stride_px,
+                                uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
 #endif
