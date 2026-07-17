@@ -1,11 +1,12 @@
 #pragma once
 
 #include <kernel/types.h>
+#include <kernel/proc_abi.h>
 #include <user/sdk/syscall.hpp>
 
 namespace hsrc::sdk::process {
 
-constexpr int kMaxProcesses = 16;
+constexpr int kMaxProcesses = PROC_PAGE_MAX;
 
 enum State : uint32_t {
     Unused = 0,
@@ -23,7 +24,7 @@ struct ProcListEntry {
     uint64_t cpu_ticks = 0;
     uint64_t uptime_ticks = 0;
     uint32_t mem_bytes = 0;
-    char     name[32]{};
+    char     name[PROC_PAGE_NAME]{};
 };
 
 struct ProcStat {
@@ -35,7 +36,7 @@ struct ProcStat {
     uint64_t start_ticks = 0;
     uint64_t uptime_ticks = 0;
     uint32_t mem_bytes = 0;
-    char     name[32]{};
+    char     name[PROC_PAGE_NAME]{};
 };
 
 struct SysInfo {
@@ -61,6 +62,16 @@ long waitpid(pid_t pid, int *status_out = nullptr, int options = 0);
 long kill(pid_t pid);
 long getpid();
 long getppid();
+
+/* Map shared proc page once (SYS_PROC_MAP). Safe to call repeatedly. */
+bool map_proc_page();
+/* Hot path: seqlock-read snapshot — no syscall after map. */
+bool snapshot(ProcListEntry *entries, int max_entries, int *count_out, SysInfo *info_out);
+/* seq changes when kernel republishes; generation bumps on create/exit. */
+uint32_t snapshot_seq();
+uint32_t snapshot_generation();
+
+/* Syscall fallbacks (also used when page unavailable). */
 long proc_list(ProcListEntry *entries, int max_entries);
 long proc_stat(pid_t pid, ProcStat *out);
 long sysinfo(SysInfo *out);

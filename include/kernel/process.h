@@ -6,11 +6,13 @@
 #include <kernel/mm.h>
 #include <kernel/env.h>
 #include <kernel/argv.h>
+#include <kernel/proc_abi.h>
 
-#define PROC_MAX         16
+/* Hard ceiling — slots are pointers only; structs/stacks grow on demand. */
+#define PROC_MAX         8192
 #define PROC_KSTACK_SIZE 8192
 #define PROC_USTACK_SIZE 8192
-#define PROC_NAME_MAX    32
+#define PROC_NAME_MAX    PROC_PAGE_NAME
 
 /* fds[]: VFS fd (>=0) or socket id tagged with PROC_FD_SOCK. */
 #define PROC_FD_SOCK     0x40000000
@@ -26,16 +28,7 @@ typedef enum {
     PROC_ZOMBIE
 } proc_state_t;
 
-typedef struct proc_list_entry {
-    pid_t    pid;
-    pid_t    ppid;
-    uint32_t state;
-    uint32_t is_user;
-    uint64_t cpu_ticks;
-    uint64_t uptime_ticks;
-    uint32_t mem_bytes;
-    char     name[PROC_NAME_MAX];
-} proc_list_entry_t;
+typedef proc_page_entry_t proc_list_entry_t;
 
 typedef struct proc_stat {
     pid_t    pid;
@@ -67,10 +60,13 @@ typedef struct process {
     uid_t        uid;          /* real uid — default 0 (root) */
     uid_t        euid;         /* effective uid — default 0 (root) */
     char         cwd[VFS_PATH_MAX];
+    int          slot;         /* index in process table, or -1 */
     uint32_t    *kstack_base;
+    uint32_t    *ustack_base;
     uint32_t     kstack_top;
     uint32_t     ustack_top;
     uint32_t    *esp;          /* saved kernel stack pointer */
+    struct process *free_next; /* freelist link when unused */
     void       (*user_entry)(void);
     int          exit_code;
     uint64_t     cpu_ticks;
@@ -81,11 +77,12 @@ typedef struct process {
     proc_argv_t  argv;
 } process_t;
 
-void       process_init(void);
-process_t *process_current(void);
-void       process_set_current(process_t *p);
-process_t *process_table(void);
-process_t *process_get(pid_t pid);
+void        process_init(void);
+process_t  *process_current(void);
+void        process_set_current(process_t *p);
+process_t **process_table(void);
+process_t  *process_get(pid_t pid);
+void        process_reap_graveyard(void);
 
 pid_t process_create(const char *name, void (*entry)(void));
 pid_t process_create_user(const char *name, void (*entry)(void));
@@ -94,9 +91,15 @@ pid_t process_waitpid(pid_t pid, int *status_out, int options);
 void  process_exit(int code);
 int   process_kill(pid_t pid);
 int   process_list(proc_list_entry_t *out, size_t max_entries);
+int   process_list_range(proc_list_entry_t *out, size_t max_entries, size_t skip);
 int   process_stat(pid_t pid, proc_stat_t *out);
 int   process_sysinfo(sys_info_t *out);
 void  process_account_tick(process_t *p);
+
+/* Shared snapshot page (SYS_PROC_MAP) — publish throttled from yield. */
+proc_page_t *process_page_get(void);
+void         process_snapshot_mark_dirty(void);
+void         process_snapshot_publish(void);
 
 int  process_alloc_fd(process_t *p, int vfs_fd);
 int  process_alloc_sock_fd(process_t *p, int sock_id);

@@ -2,6 +2,7 @@
 #include "accel.h"
 #include "font.h"
 #include "server.h"
+#include <kernel/heap.h>
 #include <kernel/string.h>
 
 typedef struct proc_console {
@@ -13,29 +14,62 @@ typedef struct proc_console {
     char  name[64];
     char  buf[PROC_CONSOLE_BUF_SIZE];
     size_t len;
+    struct proc_console *free_next;
 } proc_console_t;
 
-static proc_console_t g_consoles[PROC_CONSOLE_MAX];
+/* Pointer slots only — 8KiB buffers allocate/recycle on demand. */
+static proc_console_t *g_consoles[PROC_CONSOLE_MAX];
+static proc_console_t *g_console_freelist;
 
 static proc_console_t *slot_by_pid(int pid)
 {
     for (int i = 0; i < PROC_CONSOLE_MAX; i++) {
-        if (g_consoles[i].used && g_consoles[i].pid == pid)
-            return &g_consoles[i];
+        if (g_consoles[i] && g_consoles[i]->used && g_consoles[i]->pid == pid)
+            return g_consoles[i];
     }
     return NULL;
 }
 
+static void console_push_freelist(proc_console_t *c)
+{
+    if (!c)
+        return;
+    c->used = 0;
+    c->free_next = g_console_freelist;
+    g_console_freelist = c;
+}
+
+static proc_console_t *console_pop_freelist(void)
+{
+    proc_console_t *c = g_console_freelist;
+    if (!c)
+        return NULL;
+    g_console_freelist = c->free_next;
+    c->free_next = NULL;
+    return c;
+}
+
 static proc_console_t *alloc_slot(int pid)
 {
-    for (int i = 0; i < PROC_CONSOLE_MAX; i++) {
-        if (!g_consoles[i].used) {
-            memset(&g_consoles[i], 0, sizeof(g_consoles[i]));
-            g_consoles[i].used = 1;
-            g_consoles[i].pid = pid;
-            g_consoles[i].win_id = -1;
-            return &g_consoles[i];
+    proc_console_t *c;
+    int i;
+
+    for (i = 0; i < PROC_CONSOLE_MAX; i++) {
+        if (g_consoles[i])
+            continue;
+
+        c = console_pop_freelist();
+        if (!c) {
+            c = (proc_console_t *)kmalloc(sizeof(*c));
+            if (!c)
+                return NULL;
         }
+        memset(c, 0, sizeof(*c));
+        c->used = 1;
+        c->pid = pid;
+        c->win_id = -1;
+        g_consoles[i] = c;
+        return c;
     }
     return NULL;
 }
@@ -180,6 +214,7 @@ static int proc_console_ensure_window(wm_t *wm, proc_console_t *c, int visible)
 int proc_console_init(void)
 {
     memset(g_consoles, 0, sizeof(g_consoles));
+    g_console_freelist = NULL;
     return 0;
 }
 
@@ -189,11 +224,13 @@ void proc_console_shutdown(void)
     wm_t *wm = srv ? &srv->wm : NULL;
 
     for (int i = 0; i < PROC_CONSOLE_MAX; i++) {
-        if (!g_consoles[i].used)
+        proc_console_t *c = g_consoles[i];
+        if (!c || !c->used)
             continue;
-        if (wm && g_consoles[i].win_id >= 0)
-            wm_destroy(wm, g_consoles[i].win_id);
-        g_consoles[i].used = 0;
+        if (wm && c->win_id >= 0)
+            wm_destroy(wm, c->win_id);
+        g_consoles[i] = NULL;
+        console_push_freelist(c);
     }
 }
 
@@ -227,12 +264,19 @@ void proc_console_free(int pid)
     gx_server *srv = gx_server_get();
     wm_t *wm = srv ? &srv->wm : NULL;
     proc_console_t *c = slot_by_pid(pid);
+    int i;
 
     if (!c)
         return;
     if (wm && c->win_id >= 0)
         wm_destroy(wm, c->win_id);
-    c->used = 0;
+    for (i = 0; i < PROC_CONSOLE_MAX; i++) {
+        if (g_consoles[i] == c) {
+            g_consoles[i] = NULL;
+            break;
+        }
+    }
+    console_push_freelist(c);
 }
 
 ssize_t proc_console_write(int pid, const void *buf, size_t len)
@@ -285,8 +329,9 @@ void proc_console_paint_dirty(wm_t *wm)
     if (!wm)
         return;
     for (int i = 0; i < PROC_CONSOLE_MAX; i++) {
-        if (!g_consoles[i].used || !g_consoles[i].dirty || !g_consoles[i].visible)
+        proc_console_t *c = g_consoles[i];
+        if (!c || !c->used || !c->dirty || !c->visible)
             continue;
-        paint_console(wm, &g_consoles[i]);
+        paint_console(wm, c);
     }
 }

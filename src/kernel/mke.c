@@ -165,6 +165,43 @@ static void mke_zero_bss(const mke_header_t *hdr)
     memset((void *)(uintptr_t)(hdr->load_addr + hdr->image_size), 0, hdr->bss_size);
 }
 
+/*
+ * Single address space: reloading an .mke at a fixed load_addr overwrites any
+ * still-running instance. Kill those first so we do not corrupt live EIP/data
+ * or leave orphan windows / PROC slots (dock spam → process_create_user FAILED).
+ */
+static void mke_kill_load_overlap(const mke_header_t *hdr)
+{
+    process_t **table;
+    uint32_t lo, hi;
+    int i;
+
+    if (!hdr)
+        return;
+    lo = hdr->load_addr;
+    hi = hdr->load_addr + hdr->image_size + hdr->bss_size;
+    if (hi < lo)
+        return;
+
+    table = process_table();
+    if (!table)
+        return;
+
+    for (i = 0; i < PROC_MAX; i++) {
+        process_t *p = table[i];
+        uint32_t entry;
+
+        if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
+            continue;
+        if (!p->is_user || !p->user_entry)
+            continue;
+        entry = (uint32_t)(uintptr_t)p->user_entry;
+        if (entry < lo || entry >= hi)
+            continue;
+        (void)process_kill(p->pid);
+    }
+}
+
 static int mke_spawn_header(const mke_header_t *hdr, uint32_t spawn_flags,
                             const char *const *argv, int argc)
 {
@@ -220,6 +257,8 @@ int mke_spawn_flags(const void *blob, size_t size, uint32_t spawn_flags,
     klog(" bss=");
     serial_print_uint(hdr->bss_size);
     klog("\n");
+
+    mke_kill_load_overlap(hdr);
 
     img = (const uint8_t *)blob + hdr->header_size;
     dst = (uint8_t *)(uintptr_t)hdr->load_addr;
@@ -290,6 +329,8 @@ int mke_spawn_path_flags(const char *path, uint32_t spawn_flags,
     klog(" bss=");
     serial_print_uint(hdr.bss_size);
     klog("\n");
+
+    mke_kill_load_overlap(&hdr);
 
     dst = (uint8_t *)(uintptr_t)hdr.load_addr;
     if (vfs_lseek(fd, (off_t)hdr.header_size, SEEK_SET) < 0) {

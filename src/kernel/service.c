@@ -84,7 +84,7 @@ static void service_refresh_entry(service_entry_t *svc)
 
 static void service_bind_existing_entry(service_entry_t *svc)
 {
-    process_t *table;
+    process_t **table;
     int i;
 
     if (!svc || !svc->registered)
@@ -95,11 +95,11 @@ static void service_bind_existing_entry(service_entry_t *svc)
 
     table = process_table();
     for (i = 0; i < PROC_MAX; i++) {
-        if (!service_proc_alive(&table[i]))
+        if (!service_proc_alive(table[i]))
             continue;
-        if (!service_name_eq(table[i].name, svc->info.name))
+        if (!service_name_eq(table[i]->name, svc->info.name))
             continue;
-        svc->info.pid = table[i].pid;
+        svc->info.pid = table[i]->pid;
         svc->info.running = 1;
         return;
     }

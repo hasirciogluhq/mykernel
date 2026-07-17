@@ -7,8 +7,9 @@ static mouse_state_t state;
 static int32_t bound_w = 1024;
 static int32_t bound_h = 768;
 
-static uint8_t pkt[3];
+static uint8_t pkt[4];
 static int     pkt_i;
+static int     pkt_bytes = 3; /* 3 = standard PS/2, 4 = IntelliMouse/Explorer */
 static int     synced;
 
 static mouse_event_t evq[MOUSE_EVQ];
@@ -79,6 +80,35 @@ static int mouse_try_set_res(uint8_t res)
     return mouse_try_cmd(res);
 }
 
+/* IntelliMouse: F3 200 / F3 100 / F3 80 then F2 → ID 3 (wheel) or 4 (Explorer). */
+static int mouse_try_intellimouse(void)
+{
+    uint8_t id;
+
+    if (mouse_try_set_rate(200) < 0)
+        return -1;
+    if (mouse_try_set_rate(100) < 0)
+        return -1;
+    if (mouse_try_set_rate(80) < 0)
+        return -1;
+    if (mouse_try_cmd(0xF2) < 0)
+        return -1;
+    id = ps2_read_data();
+    if (id == 3) {
+        state.has_wheel = 1;
+        state.has_side_btns = 0;
+        pkt_bytes = 4;
+        return 0;
+    }
+    if (id == 4) {
+        state.has_wheel = 1;
+        state.has_side_btns = 1;
+        pkt_bytes = 4;
+        return 0;
+    }
+    return -1;
+}
+
 void mouse_set_bounds(int32_t w, int32_t h)
 {
     if (w > 0)
@@ -91,13 +121,17 @@ void mouse_set_bounds(int32_t w, int32_t h)
 void mouse_init(void)
 {
     pkt_i = 0;
+    pkt_bytes = 3;
     synced = 0;
     ev_h = ev_t = 0;
     state.x = bound_w / 2;
     state.y = bound_h / 2;
     state.dx = state.dy = 0;
+    state.wheel = 0;
     state.buttons = 0;
     state.buttons_prev = 0;
+    state.has_wheel = 0;
+    state.has_side_btns = 0;
     state.ready = 0;
 
     /* enable auxiliary device */
@@ -118,8 +152,15 @@ void mouse_init(void)
     /* Prefer 4 counts/mm (res=2) — res=3 felt ultra-fast on QEMU when idle.
      * 100Hz is enough; 200Hz flooded the poll path under full-frame presents. */
     (void)mouse_try_set_res(2);
-    if (mouse_try_set_rate(100) < 0)
-        (void)mouse_try_set_rate(80);
+
+    /* Arm wheel (+ optional side buttons) before final stream enable. */
+    if (mouse_try_intellimouse() < 0) {
+        if (mouse_try_set_rate(100) < 0)
+            (void)mouse_try_set_rate(80);
+        pkt_bytes = 3;
+        state.has_wheel = 0;
+        state.has_side_btns = 0;
+    }
 
     if (ps2_write_mouse(0xF4) != 0xFA)
         return;
@@ -144,7 +185,7 @@ void mouse_handle_byte(uint8_t b)
         return;
 
     pkt[pkt_i++] = b;
-    if (pkt_i < 3)
+    if (pkt_i < pkt_bytes)
         return;
     pkt_i = 0;
 
@@ -174,11 +215,42 @@ void mouse_handle_byte(uint8_t b)
     clamp_pos();
 
     state.buttons_prev = state.buttons;
-    state.buttons = flags & 0x07;
+    state.buttons = (uint8_t)(flags & 0x07);
+
+    int32_t z = 0;
+    if (pkt_bytes >= 4) {
+        uint8_t zb = pkt[3];
+        if (state.has_side_btns) {
+            /* Explorer: byte3 = [0 0 btn5 btn4 Z3 Z2 Z1 Z0] */
+            if (zb & 0x10)
+                state.buttons |= MOUSE_BTN_BACK;
+            if (zb & 0x20)
+                state.buttons |= MOUSE_BTN_FORWARD;
+            int8_t zn = (int8_t)(zb & 0x0F);
+            if (zn & 0x08)
+                zn = (int8_t)(zn | (int8_t)0xF0);
+            z = (int32_t)zn;
+        } else {
+            /* IntelliMouse ID=3: full signed wheel byte. */
+            z = (int32_t)(int8_t)zb;
+        }
+        if (z != 0) {
+            state.wheel += z;
+            mouse_event_t wev;
+            wev.type = MOUSE_EV_WHEEL;
+            wev.x = state.x;
+            wev.y = state.y;
+            wev.wheel = z;
+            wev.button = 0;
+            wev.buttons = state.buttons;
+            ev_push(&wev);
+        }
+    }
 
     mouse_event_t ev;
     ev.x = state.x;
     ev.y = state.y;
+    ev.wheel = 0;
     ev.buttons = state.buttons;
 
     if (dx || dy) {
@@ -188,7 +260,7 @@ void mouse_handle_byte(uint8_t b)
     }
 
     uint8_t changed = state.buttons ^ state.buttons_prev;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
         uint8_t bit = (uint8_t)(1u << i);
         if (!(changed & bit))
             continue;
@@ -201,6 +273,13 @@ void mouse_handle_byte(uint8_t b)
 const mouse_state_t *mouse_get(void)
 {
     return &state;
+}
+
+int32_t mouse_consume_wheel(void)
+{
+    int32_t w = state.wheel;
+    state.wheel = 0;
+    return w;
 }
 
 int mouse_pop_event(mouse_event_t *ev)

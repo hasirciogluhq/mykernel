@@ -41,10 +41,16 @@ constexpr unsigned kAbsentRetryEvery = 256; /* refresh_theme calls while missing
 constexpr const char *kDefaultIni =
     "general.appearance=Light\n"
     "desktop.dock-size=Medium\n"
+    "dock.magnification=On\n"
+    "dock.mag-size=18\n"
+    "dock.mag-range=132\n"
+    "dock.mag-speed=Normal\n"
     "dock.pin.monitor=On\n"
     "dock.pin.terminal=On\n"
     "dock.pin.files=On\n"
     "dock.pin.settings=On\n"
+    "mouse.natural-scroll=On\n"
+    "mouse.wheel-lines=3\n"
     "status.wifi_connected=1\n"
     "status.wifi_bars=3\n"
     "status.battery_percent=78\n"
@@ -462,18 +468,11 @@ long find_settings_window()
     if (wid >= 0)
         return wid;
 
-    /* Fallback: scan by class_name if title was changed. */
-    for (int id = 1; id < 32; id++) {
-        hsrc::sdk::WindowOptions opts;
-        if (!hsrc::sdk::window_get(id, opts))
-            continue;
-        if (!opts.class_name[0])
-            continue;
-        if (strcmp(opts.class_name, kSettingsClass) == 0 ||
-            strcmp(opts.class_name, "os-settings") == 0)
-            return id;
-    }
-    return -1;
+    /* Class lookup — one syscall, no id-space probe storm. */
+    wid = hsrc::sdk::syscall1(SYS_WM_FIND_CLASS, (long)kSettingsClass);
+    if (wid >= 0)
+        return wid;
+    return hsrc::sdk::syscall1(SYS_WM_FIND_CLASS, (long)"os-settings");
 }
 
 } // namespace
@@ -585,6 +584,14 @@ const StatusInfo &status()
 
 bool refresh_status()
 {
+    /* Status keys change rarely (Settings save). Avoid open/read/close storms. */
+    static unsigned s_skip;
+    constexpr unsigned kReloadEvery = 8; /* caller already rate-limits */
+
+    if (g_status_loaded && ++s_skip < kReloadEvery)
+        return false;
+    s_skip = 0;
+
     StatusInfo prev = g_status;
     load_status_from_disk();
     return prev.wifi_connected != g_status.wifi_connected ||

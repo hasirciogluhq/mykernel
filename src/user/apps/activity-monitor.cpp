@@ -5,7 +5,7 @@
 #include <user/string.h>
 
 /*
- * Activity Monitor — gfx API process list, terminal-clean layout.
+ * Activity Monitor — reads shared proc_page (no PROC_LIST/SYSINFO spam).
  */
 
 namespace {
@@ -30,10 +30,11 @@ constexpr int kPad = 12;
 constexpr int kRowH = 22;
 constexpr int kVisibleRows = 12;
 constexpr int kListY = kChromeTitleH + 72;
-constexpr int kRefreshEvery = 24;
 constexpr int kMaxEntries = hsrc::sdk::process::kMaxProcesses;
 constexpr int kStatusChars = 128;
-constexpr int kThemePollEvery = 96;
+constexpr int kThemePollEvery = 240;
+/* Sample when shared page seq advances; also force-redraw at this yield cadence. */
+constexpr int kOptsPollEvery = 32;
 
 struct MonitorEntry {
     ProcListEntry proc{};
@@ -55,15 +56,17 @@ SysInfo g_sysinfo{};
 ProcStat g_selected_stat{};
 int g_entry_count = 0;
 int g_scroll = 0;
-int g_refresh_counter = 0;
 bool g_has_selected_stat = false;
 bool g_dirty = true;
 bool g_was_minimized = false;
 int g_theme_poll = 0;
+int g_opts_poll = 0;
 pid_t g_selected_pid = -1;
 pid_t g_self_pid = -1;
 uint64_t g_prev_total_ticks = 0;
 uint32_t g_total_cpu_pct = 0;
+uint32_t g_last_seq = 0;
+uint64_t g_last_sample_ticks = 0;
 char g_status[kStatusChars];
 
 void copy_text(char *dst, size_t dst_size, const char *src)
@@ -193,14 +196,10 @@ void refresh_monitor(bool keep_status)
 {
     ProcListEntry raw[kMaxEntries];
     SysInfo info{};
-    long count = hsrc::sdk::process::proc_list(raw, kMaxEntries);
+    int count = 0;
 
-    if (hsrc::sdk::process::sysinfo(&info) < 0) {
-        set_status("sysinfo unavailable");
-        return;
-    }
-    if (count < 0) {
-        set_status("proc_list unavailable");
+    if (!hsrc::sdk::process::snapshot(raw, kMaxEntries, &count, &info)) {
+        set_status("proc snapshot unavailable");
         return;
     }
     if (count > kMaxEntries)
@@ -211,14 +210,19 @@ void refresh_monitor(bool keep_status)
         total_delta = info.total_cpu_ticks - g_prev_total_ticks;
     uint32_t total_delta32 = narrow_u64(total_delta);
     g_total_cpu_pct = 0;
-    if (total_delta32 > 0) {
-        g_total_cpu_pct = (total_delta32 * 100u) / (uint32_t)kRefreshEvery;
+    if (total_delta32 > 0 && g_last_sample_ticks > 0) {
+        uint64_t sample_dt = info.uptime_ticks >= g_last_sample_ticks
+                                 ? info.uptime_ticks - g_last_sample_ticks
+                                 : 0;
+        if (sample_dt == 0)
+            sample_dt = 1;
+        g_total_cpu_pct = (total_delta32 * 100u) / narrow_u64(sample_dt);
         if (g_total_cpu_pct > 100)
             g_total_cpu_pct = 100;
     }
 
     g_sysinfo = info;
-    g_entry_count = (int)count;
+    g_entry_count = count;
     for (int i = 0; i < g_entry_count; i++) {
         g_entries[i].proc = raw[i];
         g_entries[i].cpu_pct = 0;
@@ -233,11 +237,28 @@ void refresh_monitor(bool keep_status)
     sort_entries();
     remember_samples();
     g_prev_total_ticks = info.total_cpu_ticks;
+    g_last_sample_ticks = info.uptime_ticks;
+    g_last_seq = hsrc::sdk::process::snapshot_seq();
 
     if (g_selected_pid > 0) {
-        g_has_selected_stat = hsrc::sdk::process::proc_stat(g_selected_pid, &g_selected_stat) == 0;
-        if (!g_has_selected_stat)
+        /* Prefer list row data — avoid PROC_STAT syscall every sample. */
+        int idx = selected_index();
+        if (idx >= 0) {
+            const ProcListEntry &e = g_entries[idx].proc;
+            g_selected_stat.pid = e.pid;
+            g_selected_stat.ppid = e.ppid;
+            g_selected_stat.state = e.state;
+            g_selected_stat.is_user = e.is_user;
+            g_selected_stat.cpu_ticks = e.cpu_ticks;
+            g_selected_stat.uptime_ticks = e.uptime_ticks;
+            g_selected_stat.mem_bytes = e.mem_bytes;
+            g_selected_stat.start_ticks = 0;
+            copy_text(g_selected_stat.name, sizeof(g_selected_stat.name), e.name);
+            g_has_selected_stat = true;
+        } else {
+            g_has_selected_stat = false;
             g_selected_pid = -1;
+        }
     } else {
         g_has_selected_stat = false;
     }
@@ -245,7 +266,7 @@ void refresh_monitor(bool keep_status)
     if (g_scroll > 0 && g_scroll >= g_entry_count)
         g_scroll = g_entry_count > 0 ? g_entry_count - 1 : 0;
     if (!keep_status)
-        set_status("cooperative sample · select then end");
+        set_status("shared snapshot · select then end");
     g_dirty = true;
 }
 
@@ -439,7 +460,17 @@ void handle_click(const Input &in)
     const int row = row_hit(lx, ly);
     if (row >= 0) {
         g_selected_pid = g_entries[row].proc.pid;
-        g_has_selected_stat = hsrc::sdk::process::proc_stat(g_selected_pid, &g_selected_stat) == 0;
+        const ProcListEntry &e = g_entries[row].proc;
+        g_selected_stat.pid = e.pid;
+        g_selected_stat.ppid = e.ppid;
+        g_selected_stat.state = e.state;
+        g_selected_stat.is_user = e.is_user;
+        g_selected_stat.cpu_ticks = e.cpu_ticks;
+        g_selected_stat.uptime_ticks = e.uptime_ticks;
+        g_selected_stat.mem_bytes = e.mem_bytes;
+        g_selected_stat.start_ticks = 0;
+        copy_text(g_selected_stat.name, sizeof(g_selected_stat.name), e.name);
+        g_has_selected_stat = true;
         g_dirty = true;
     }
 }
@@ -458,6 +489,7 @@ extern "C" void mke_main(void)
     g_self_pid = (pid_t)hsrc::sdk::process::getpid();
     set_status("collecting...");
     (void)refresh_theme();
+    (void)hsrc::sdk::process::map_proc_page();
 
     WindowOptions opts;
     opts.x = g_screen.width > (uint32_t)kWinW ? ((int)g_screen.width - kWinW) / 2 : 24;
@@ -476,17 +508,19 @@ extern "C" void mke_main(void)
     opts.set_title("Activity Monitor");
     opts.set_class_name("os.activity-monitor");
 
-    if (!g_win.create(opts)) {
-        for (;;)
-            hsrc::sdk::yield();
-    }
+    if (!g_win.create(opts))
+        hsrc::sdk::exit(1);
     (void)refresh_window_options();
 
     g_win.show(true);
     g_win.focus();
-    refresh_monitor(false);
     paint();
     (void)hsrc::sdk::present();
+    refresh_monitor(false);
+    if (g_dirty) {
+        paint();
+        (void)hsrc::sdk::present();
+    }
 
     for (;;) {
         if (!g_win.ok()) {
@@ -501,11 +535,22 @@ extern "C" void mke_main(void)
                 g_dirty = true;
         }
 
-        (void)refresh_window_options();
+        /* WM_GET only on a slow cadence unless we need geometry for clicks. */
+        g_opts_poll++;
+        if (g_opts_poll >= kOptsPollEvery) {
+            g_opts_poll = 0;
+            (void)refresh_window_options();
+        }
 
         Input in{};
         if (hsrc::sdk::input(in)) {
+            const bool moved = in.mouse_x != g_prev_input.mouse_x ||
+                               in.mouse_y != g_prev_input.mouse_y;
             const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_input.buttons);
+            if (moved || pressed) {
+                g_opts_poll = kOptsPollEvery;
+                (void)refresh_window_options();
+            }
             if (pressed & UGX_BTN_LEFT) {
                 const bool interactive = !g_win_opts.minimized && g_win_opts.visible;
                 const int lx = in.mouse_x - g_win_opts.x;
@@ -519,10 +564,10 @@ extern "C" void mke_main(void)
             g_prev_input = in;
         }
 
-        g_refresh_counter++;
-        if (g_refresh_counter >= kRefreshEvery) {
-            g_refresh_counter = 0;
-            if (!g_win_opts.minimized)
+        /* Sample only when kernel republished the shared page. */
+        if (!g_win_opts.minimized) {
+            uint32_t seq = hsrc::sdk::process::snapshot_seq();
+            if (seq != 0 && seq != g_last_seq && (seq & 1u) == 0)
                 refresh_monitor(true);
         }
 

@@ -450,6 +450,7 @@ static int api_input_state(void *out)
     o->buttons = ms->buttons;
     o->mods = keyboard_modifiers();
     o->focus_id = wm_focused_id(&s->wm);
+    o->wheel = mouse_consume_wheel();
     return 0;
 }
 

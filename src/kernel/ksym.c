@@ -117,9 +117,10 @@ static const ksym_t g_ksyms[] = {
     { "klog_uint",          (void *)klog_uint },
     { "klog_hex",           (void *)klog_hex },
 
-    { "mouse_get",          (void *)mouse_get },
-    { "mouse_pop_event",    (void *)mouse_pop_event },
-    { "mouse_set_bounds",   (void *)mouse_set_bounds },
+    { "mouse_get",            (void *)mouse_get },
+    { "mouse_pop_event",      (void *)mouse_pop_event },
+    { "mouse_consume_wheel",  (void *)mouse_consume_wheel },
+    { "mouse_set_bounds",     (void *)mouse_set_bounds },
     { "keyboard_getchar",   (void *)keyboard_getchar },
     { "keyboard_modifiers", (void *)keyboard_modifiers },
     { "ps2_poll",           (void *)ps2_poll },

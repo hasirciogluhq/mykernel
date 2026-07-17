@@ -37,15 +37,16 @@ using hsrc::sdk::settings::status;
 
 constexpr int kMenubarH = 28;
 constexpr int kDockTrayH = 72;   /* acrylic tray body */
-constexpr int kDockMagPad = 20;  /* headroom above tray for magnification */
+constexpr int kDockMagPad = 48;  /* headroom above tray for magnification */
 constexpr int kDockH = kDockMagPad + kDockTrayH;
 constexpr int kDockPad = 18;
 constexpr int kDockGap = 14;
 constexpr int kDockRad = 20;
-constexpr int kHoverMag = 14;    /* max hovered icon boost (px) */
 constexpr int kMagFP = 16;       /* fixed-point for mag lerp (px * kMagFP) */
-constexpr int kMagLerpDiv = 4;   /* ~macOS snappy ease toward target */
 constexpr int kSepW = 10;
+constexpr int kDefaultMagSize = 18;
+constexpr int kDefaultMagRange = 132;
+constexpr int kDefaultMagLerp = 3;
 constexpr int kMaxSlots = 10;
 constexpr int kScanEvery = 12;
 constexpr int kPinPollEvery = 64;
@@ -119,7 +120,12 @@ int g_dock_w = 0;       /* fixed max surface width */
 int g_tray_w = 0;       /* painted / hit tray width */
 int g_tray_target = 0;
 int g_icon = 52;
-int g_hover = -1;
+int g_hover = -1;          /* nearest slot under cursor (click target) */
+int g_mag_cursor_x = -1;   /* dock-local X while pointer is in tray; else -1 */
+bool g_mag_enabled = true;
+int g_mag_size = kDefaultMagSize;   /* max boost px from ini */
+int g_mag_range = kDefaultMagRange; /* influence radius px */
+int g_mag_lerp = kDefaultMagLerp;   /* lerp divisor Fast=2 Normal=3 Slow=5 */
 int g_menu_hover = -1;
 int g_status_hover = -1; /* 0=theme 1=wifi 2=battery 3=clock */
 int g_focus_id = -1;
@@ -159,6 +165,8 @@ int text_width(const char *s)
 {
     return Surface::text_width(s, 1);
 }
+
+int slot_local_x(int index);
 
 Color menubar_fg()
 {
@@ -243,49 +251,37 @@ int abs_i(int v)
     return v < 0 ? -v : v;
 }
 
-int icon_size_from_pref()
+int parse_ini_int(const char *s, int fallback)
 {
-    /* desktop.dock-size: Small=44 Medium=52 Large=60 */
-    int fd = (int)hsrc::sdk::open("/etc/os-settings.ini", O_RDONLY);
-    if (fd < 0)
-        return 52;
-    char buf[kIniBytes];
-    memset(buf, 0, sizeof(buf));
-    long n = hsrc::sdk::read(fd, buf, sizeof(buf) - 1);
-    (void)hsrc::sdk::close(fd);
-    if (n <= 0)
-        return 52;
-
-    int start = 0;
-    for (long i = 0; i <= n; i++) {
-        if (buf[i] != '\n' && buf[i] != '\r' && buf[i] != 0)
-            continue;
-        buf[i] = 0;
-        char *line = buf + start;
-        start = (int)i + 1;
-        if (!line[0])
-            continue;
-        char *eq = line;
-        while (*eq && *eq != '=')
-            eq++;
-        if (*eq != '=')
-            continue;
-        *eq++ = 0;
-        if (strcmp(line, "desktop.dock-size") != 0)
-            continue;
-        if (strcmp(eq, "Small") == 0)
-            return 44;
-        if (strcmp(eq, "Large") == 0)
-            return 60;
-        return 52;
+    if (!s || !s[0])
+        return fallback;
+    int neg = 0;
+    int i = 0;
+    if (s[0] == '-') {
+        neg = 1;
+        i = 1;
     }
-    return 52;
+    int v = 0;
+    int digits = 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        v = v * 10 + (s[i] - '0');
+        i++;
+        digits++;
+    }
+    if (!digits)
+        return fallback;
+    return neg ? -v : v;
 }
 
-void load_pins()
+void load_dock_prefs()
 {
     for (int i = 0; i < APP_COUNT; i++)
         g_pinned[i] = kApps[i].default_pinned;
+    g_icon = 52;
+    g_mag_enabled = true;
+    g_mag_size = kDefaultMagSize;
+    g_mag_range = kDefaultMagRange;
+    g_mag_lerp = kDefaultMagLerp;
 
     int fd = (int)hsrc::sdk::open("/etc/os-settings.ini", O_RDONLY);
     if (fd < 0)
@@ -312,12 +308,45 @@ void load_pins()
         if (*eq != '=')
             continue;
         *eq++ = 0;
-        for (int a = 0; a < APP_COUNT; a++) {
-            if (strcmp(line, kApps[a].pin_key) != 0)
-                continue;
-            g_pinned[a] = !(strcmp(eq, "Off") == 0 || strcmp(eq, "0") == 0 ||
-                            strcmp(eq, "false") == 0);
-            break;
+
+        if (strcmp(line, "desktop.dock-size") == 0) {
+            if (strcmp(eq, "Small") == 0)
+                g_icon = 44;
+            else if (strcmp(eq, "Large") == 0)
+                g_icon = 60;
+            else
+                g_icon = 52;
+        } else if (strcmp(line, "dock.magnification") == 0) {
+            g_mag_enabled = !(strcmp(eq, "Off") == 0 || strcmp(eq, "0") == 0);
+        } else if (strcmp(line, "dock.mag-size") == 0) {
+            int v = parse_ini_int(eq, kDefaultMagSize);
+            if (v < 4)
+                v = 4;
+            if (v > 48)
+                v = 48;
+            g_mag_size = v;
+        } else if (strcmp(line, "dock.mag-range") == 0) {
+            int v = parse_ini_int(eq, kDefaultMagRange);
+            if (v < 40)
+                v = 40;
+            if (v > 280)
+                v = 280;
+            g_mag_range = v;
+        } else if (strcmp(line, "dock.mag-speed") == 0) {
+            if (strcmp(eq, "Fast") == 0)
+                g_mag_lerp = 2;
+            else if (strcmp(eq, "Slow") == 0)
+                g_mag_lerp = 5;
+            else
+                g_mag_lerp = 3;
+        } else {
+            for (int a = 0; a < APP_COUNT; a++) {
+                if (strcmp(line, kApps[a].pin_key) != 0)
+                    continue;
+                g_pinned[a] = !(strcmp(eq, "Off") == 0 || strcmp(eq, "0") == 0 ||
+                                strcmp(eq, "false") == 0);
+                break;
+            }
         }
     }
 }
@@ -341,29 +370,31 @@ void scan_windows()
     for (int i = 0; i < APP_COUNT; i++) {
         g_running[i] = false;
         g_minimized[i] = false;
-        g_win_id[i] = -1;
-    }
 
-    for (int id = 1; id < 32; id++) {
+        /* Reuse cached id when still valid — 1 GET instead of id-space probes. */
+        int id = g_win_id[i];
         WindowOptions opts;
-        if (!hsrc::sdk::window_get(id, opts))
+        if (id >= 0 && hsrc::sdk::window_get(id, opts) &&
+            app_from_class(opts.class_name) == i) {
+            g_running[i] = true;
+            g_minimized[i] = opts.minimized || !opts.visible;
             continue;
-        if (!opts.class_name[0])
-            continue;
-        if (strncmp(opts.class_name, "shell.", 6) == 0)
-            continue;
-
-        int app = app_from_class(opts.class_name);
-        if (app < 0)
-            continue;
-
-        /* Prefer visible non-minimized; else keep first match. */
-        if (g_win_id[app] < 0 ||
-            (g_minimized[app] && !opts.minimized && opts.visible)) {
-            g_win_id[app] = id;
-            g_running[app] = true;
-            g_minimized[app] = opts.minimized || !opts.visible;
         }
+
+        id = hsrc::sdk::window_find_class(kApps[i].class_name);
+        if (id < 0 && i == APP_SETTINGS)
+            id = hsrc::sdk::window_find_class("os-settings"); /* legacy */
+        if (id < 0) {
+            g_win_id[i] = -1;
+            continue;
+        }
+        if (!hsrc::sdk::window_get(id, opts)) {
+            g_win_id[i] = -1;
+            continue;
+        }
+        g_win_id[i] = id;
+        g_running[i] = true;
+        g_minimized[i] = opts.minimized || !opts.visible;
     }
 }
 
@@ -382,21 +413,6 @@ int bounce_offset(int bounce)
     return 0;
 }
 
-/* Target boost in px — only meaningful while cursor is over the dock tray. */
-int hover_boost_px(int slot, int hover)
-{
-    if (hover < 0)
-        return 0;
-    int d = abs_i(slot - hover);
-    if (d == 0)
-        return kHoverMag;
-    if (d == 1)
-        return (kHoverMag * 5) / 10;
-    if (d == 2)
-        return (kHoverMag * 2) / 10;
-    return 0;
-}
-
 int mag_to_px(int mag_fp)
 {
     if (mag_fp <= 0)
@@ -404,21 +420,44 @@ int mag_to_px(int mag_fp)
     return (mag_fp + kMagFP / 2) / kMagFP;
 }
 
+/*
+ * Continuous macOS-style mag: each icon's target size from |cursor_x - center|.
+ * Outside the tray (g_mag_cursor_x < 0) every target collapses to 0.
+ * Falloff: smoothstep t^2 * (3-2t) on (1 - dist/range).
+ * Size/range/speed come from /etc/os-settings.ini (Desktop & Dock).
+ */
 void update_mag_targets()
 {
-    for (int i = 0; i < g_slot_count; i++)
-        g_slots[i].mag_target = hover_boost_px(i, g_hover) * kMagFP;
+    const int range = g_mag_range > 0 ? g_mag_range : kDefaultMagRange;
+    const int max_boost = g_mag_enabled ? g_mag_size : 0;
+    for (int i = 0; i < g_slot_count; i++) {
+        if (g_mag_cursor_x < 0 || max_boost <= 0) {
+            g_slots[i].mag_target = 0;
+            continue;
+        }
+        const int cx = slot_local_x(i) + g_icon / 2;
+        const int dist = abs_i(g_mag_cursor_x - cx);
+        if (dist >= range) {
+            g_slots[i].mag_target = 0;
+            continue;
+        }
+        const int u = range - dist;
+        const int s_num = u * u * (3 * range - 2 * u);
+        const int s_den = range * range * range;
+        g_slots[i].mag_target = (max_boost * kMagFP * s_num) / s_den;
+    }
 }
 
 bool tick_magnification()
 {
     bool moved = false;
+    int lerp = g_mag_lerp > 0 ? g_mag_lerp : kDefaultMagLerp;
     for (int i = 0; i < g_slot_count; i++) {
         DockSlot &s = g_slots[i];
         int diff = s.mag_target - s.mag;
         if (diff == 0)
             continue;
-        int step = diff / kMagLerpDiv;
+        int step = diff / lerp;
         if (step == 0)
             step = (diff > 0) ? 1 : -1;
         s.mag += step;
@@ -733,26 +772,30 @@ void paint_dock()
     g_dock.damage();
 }
 
-/*
- * Cursor must be over the painted tray (padding + icon row + gaps).
- * Mag headroom above the tray is NOT a hover zone — only visual overflow.
- * Nearest icon center picks which slot magnifies.
- */
-int dock_hit(int x, int y)
+/* True if pointer is inside the painted tray; writes dock-local coords. */
+bool dock_tray_contains(int x, int y, int *out_lx, int *out_ly)
 {
-    if (g_slot_count <= 0)
-        return -1;
-
     const int lx = x - g_dock_x;
     const int ly = y - g_dock_y;
     const int tray0 = (g_dock_w - g_tray_w) / 2;
     const int tray_y = kDockMagPad;
 
     if (ly < tray_y || ly >= tray_y + kDockTrayH)
-        return -1;
+        return false;
     if (lx < tray0 || lx >= tray0 + g_tray_w)
-        return -1;
+        return false;
+    if (out_lx)
+        *out_lx = lx;
+    if (out_ly)
+        *out_ly = ly;
+    return true;
+}
 
+/* Nearest icon center to dock-local X (click target). */
+int dock_nearest_slot(int lx)
+{
+    if (g_slot_count <= 0)
+        return -1;
     int best = 0;
     int best_d = abs_i(lx - (slot_local_x(0) + g_icon / 2));
     for (int i = 1; i < g_slot_count; i++) {
@@ -903,8 +946,7 @@ bool build_ui()
         }
     }
 
-    load_pins();
-    g_icon = icon_size_from_pref();
+    load_dock_prefs();
     scan_windows();
     rebuild_slots();
     g_tray_w = g_tray_target;
@@ -1034,12 +1076,16 @@ extern "C" void mke_main(void)
             g_pin_tick++;
             if (g_pin_tick >= kPinPollEvery / kScanEvery) {
                 g_pin_tick = 0;
-                load_pins();
-                int next_icon = icon_size_from_pref();
-                if (next_icon != g_icon) {
-                    g_icon = next_icon;
+                int prev_icon = g_icon;
+                int prev_mag = g_mag_size;
+                int prev_range = g_mag_range;
+                int prev_lerp = g_mag_lerp;
+                bool prev_en = g_mag_enabled;
+                load_dock_prefs();
+                if (prev_icon != g_icon || prev_mag != g_mag_size ||
+                    prev_range != g_mag_range || prev_lerp != g_mag_lerp ||
+                    prev_en != g_mag_enabled)
                     dirty_dock = true;
-                }
             }
 
             rebuild_slots();
@@ -1065,14 +1111,21 @@ extern "C" void mke_main(void)
 
             const int menu_hover = menubar_hit(in.mouse_x, in.mouse_y);
             const int status_hover = status_hit(in.mouse_x, in.mouse_y);
-            const int hover = dock_hit(in.mouse_x, in.mouse_y);
+
+            int lx = 0;
+            const bool in_tray = dock_tray_contains(in.mouse_x, in.mouse_y, &lx, nullptr);
+            const int mag_x = in_tray ? lx : -1;
+            const int hover = in_tray ? dock_nearest_slot(lx) : -1;
+
             if (menu_hover != g_menu_hover || status_hover != g_status_hover) {
                 g_menu_hover = menu_hover;
                 g_status_hover = status_hover;
                 dirty_menu = true;
             }
-            if (hover != g_hover) {
+            /* Mag is continuous on cursor X — dirty whenever pointer moves in tray. */
+            if (hover != g_hover || mag_x != g_mag_cursor_x) {
                 g_hover = hover;
+                g_mag_cursor_x = mag_x;
                 dirty_dock = true;
             }
 

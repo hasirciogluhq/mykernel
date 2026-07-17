@@ -10,10 +10,10 @@
 #include <drivers/vga.h>
 #include "vfs_internal.h"
 
-#define VFS_MAX_OPEN     64
 #define VFS_MAX_MOUNTS   16
 
-static file_t g_files[VFS_MAX_OPEN];
+/* Allocated once in vfs_drv_init — avoids huge .bss prealloc. */
+static file_t *g_files;
 static vfsmount_t g_mounts[VFS_MAX_MOUNTS];
 static file_system_type_t *g_fs_types;
 static vfsmount_t *g_root_mnt;
@@ -55,6 +55,8 @@ static dentry_t *dentry_alloc(const char *name, dentry_t *parent, inode_t *inode
 static int alloc_fd(void)
 {
     int i;
+    if (!g_files)
+        return -ENOMEM;
     for (i = 0; i < VFS_MAX_OPEN; i++) {
         if (!g_files[i].used)
             return i;
@@ -436,7 +438,7 @@ static int vfs_do_open(const char *path, int flags)
 static ssize_t vfs_do_read(int fd, void *buf, size_t count)
 {
     file_t *f;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     f = &g_files[fd];
     if (f->f_flags == O_WRONLY)
@@ -449,7 +451,7 @@ static ssize_t vfs_do_read(int fd, void *buf, size_t count)
 static ssize_t vfs_do_write(int fd, const void *buf, size_t count)
 {
     file_t *f;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     f = &g_files[fd];
     if (f->f_flags == O_RDONLY)
@@ -462,7 +464,7 @@ static ssize_t vfs_do_write(int fd, const void *buf, size_t count)
 static int vfs_do_close(int fd)
 {
     file_t *f;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     f = &g_files[fd];
     if (f->f_op && f->f_op->release)
@@ -477,7 +479,7 @@ static off_t vfs_do_lseek(int fd, off_t off, int whence)
 {
     file_t *f;
     off_t base;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     f = &g_files[fd];
     if (f->f_op && f->f_op->llseek)
@@ -674,7 +676,7 @@ static int vfs_do_fstat(int fd, void *statbuf)
 {
     file_t *f;
     vfs_stat_t *st = (vfs_stat_t *)statbuf;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     if (!st)
         return -EINVAL;
@@ -691,7 +693,7 @@ static int vfs_do_fstat(int fd, void *statbuf)
 static int vfs_do_ioctl(int fd, unsigned long cmd, void *arg)
 {
     file_t *f;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     f = &g_files[fd];
     if (!f->f_op || !f->f_op->ioctl)
@@ -702,7 +704,7 @@ static int vfs_do_ioctl(int fd, unsigned long cmd, void *arg)
 static int vfs_do_fsync(int fd)
 {
     file_t *f;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     f = &g_files[fd];
     if (!f->f_op || !f->f_op->fsync)
@@ -713,7 +715,7 @@ static int vfs_do_fsync(int fd)
 static int vfs_do_readdir(int fd, void *dirent, size_t max)
 {
     file_t *f;
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     f = &g_files[fd];
     if (!f->f_op || !f->f_op->readdir)
@@ -746,7 +748,7 @@ static int vfs_do_aio_submit(vfs_aio_t *aio)
 
     if (!aio)
         return -EINVAL;
-    if (aio->fd < 0 || aio->fd >= VFS_MAX_OPEN || !g_files[aio->fd].used)
+    if (!g_files || aio->fd < 0 || aio->fd >= VFS_MAX_OPEN || !g_files[aio->fd].used)
         return -EBADF;
     f = &g_files[aio->fd];
     aio->done = 0;
@@ -879,7 +881,7 @@ static int vfs_do_removexattr(const char *path, const char *name)
 
 static int vfs_do_flock(int fd, int cmd, void *fl)
 {
-    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+    if (!g_files || fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
         return -EBADF;
     return vfs_flock(&g_files[fd], cmd, (flock_t *)fl);
 }
@@ -988,7 +990,12 @@ static int vfs_drv_init(driver_t *drv, void *ctx)
 {
     (void)drv;
     (void)ctx;
-    memset(g_files, 0, sizeof(g_files));
+    g_files = (file_t *)kmalloc(sizeof(file_t) * VFS_MAX_OPEN);
+    if (!g_files) {
+        vga_print("vfs: file table alloc failed\n");
+        return -ENOMEM;
+    }
+    memset(g_files, 0, sizeof(file_t) * VFS_MAX_OPEN);
     memset(g_mounts, 0, sizeof(g_mounts));
     g_fs_types = NULL;
     g_root_mnt = NULL;

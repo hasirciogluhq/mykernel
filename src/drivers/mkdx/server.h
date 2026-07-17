@@ -10,7 +10,6 @@ typedef struct gx_server {
     gx_compositor comp;
     wm_t          wm;
     gx_surface   *wallpaper;
-    gx_surface   *scene;       /* composed frame without cursor */
     gx_surface   *cursor;      /* ARGB cursor glyph */
     int           dirty;       /* 1 = needs compose/present */
     int           dirty_full;  /* 1 = full-screen damage */

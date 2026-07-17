@@ -1469,10 +1469,8 @@ extern "C" void mke_main(void)
     opts.capture_keys = true;
     opts.set_title("Terminal");
     opts.set_class_name("os.terminal");
-    if (!g_win.create(opts)) {
-        for (;;)
-            hsrc::sdk::yield();
-    }
+    if (!g_win.create(opts))
+        hsrc::sdk::exit(1);
     (void)refresh_window_options();
 
     g_win.show(true);

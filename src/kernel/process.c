@@ -11,20 +11,88 @@
 #include <drivers/serial.h>
 #include <arch/x86/gdt.h>
 
-static process_t processes[PROC_MAX];
-static uint32_t  kstacks[PROC_MAX][PROC_KSTACK_SIZE / sizeof(uint32_t)];
-static uint32_t  ustacks[PROC_MAX][PROC_USTACK_SIZE / sizeof(uint32_t)];
-static pid_t     next_pid = 1;
+/* Slot table is pointers only — process_t + stacks come from heap / freelist. */
+static process_t *g_procs[PROC_MAX];
+static process_t *g_proc_freelist;
+/* Exited (ppid==0) procs wait here until schedule() runs on another stack. */
+static process_t *g_exit_graveyard;
+static pid_t      next_pid = 1;
 static process_t *current;
 
-static void process_clear_slot(process_t *p)
+/* Identity-mapped snapshot for userspace (see SYS_PROC_MAP). */
+static proc_page_t g_proc_page;
+static int         g_proc_page_dirty = 1;
+static uint64_t    g_proc_page_last_tick;
+
+static void process_push_freelist(process_t *p)
 {
     if (!p)
         return;
-    memset(p, 0, sizeof(*p));
     p->state = PROC_UNUSED;
+    p->slot = -1;
+    p->free_next = g_proc_freelist;
+    g_proc_freelist = p;
+}
+
+static process_t *process_pop_freelist(void)
+{
+    process_t *p = g_proc_freelist;
+    if (!p)
+        return NULL;
+    g_proc_freelist = p->free_next;
+    p->free_next = NULL;
+    return p;
+}
+
+static process_t *process_alloc_struct(void)
+{
+    process_t *p = process_pop_freelist();
+    uint32_t *kbase;
+    uint32_t *ubase;
+
+    if (p)
+        return p;
+
+    p = (process_t *)kmalloc(sizeof(*p));
+    if (!p)
+        return NULL;
+    memset(p, 0, sizeof(*p));
+
+    kbase = (uint32_t *)kmalloc_aligned(PROC_KSTACK_SIZE, 16);
+    ubase = (uint32_t *)kmalloc_aligned(PROC_USTACK_SIZE, 16);
+    if (!kbase || !ubase) {
+        /* Bump heap cannot reclaim partial failure; refuse the slot. */
+        return NULL;
+    }
+    p->kstack_base = kbase;
+    p->ustack_base = ubase;
+    return p;
+}
+
+static void process_clear_slot(process_t *p)
+{
+    uint32_t *kbase;
+    uint32_t *ubase;
+    int slot;
+
+    if (!p)
+        return;
+
+    kbase = p->kstack_base;
+    ubase = p->ustack_base;
+    slot = p->slot;
+
+    if (slot >= 0 && slot < PROC_MAX && g_procs[slot] == p)
+        g_procs[slot] = NULL;
+
+    memset(p, 0, sizeof(*p));
+    p->kstack_base = kbase;
+    p->ustack_base = ubase;
     for (int fd = 0; fd < VFS_MAX_FD; fd++)
         p->fds[fd] = -1;
+
+    process_push_freelist(p);
+    process_snapshot_mark_dirty();
 }
 
 static uint32_t process_mem_bytes(const process_t *p)
@@ -113,29 +181,58 @@ static void user_trampoline(void (*entry)(void))
         __asm__ volatile("hlt");
 }
 
+/* Parents (os-ui) never waitpid — reap zombies so PROC_MAX does not fill. */
+static void process_reap_zombies(void)
+{
+    for (int i = 0; i < PROC_MAX; i++) {
+        process_t *p = g_procs[i];
+        if (!p || p->state != PROC_ZOMBIE)
+            continue;
+        process_release_fds(p);
+        process_clear_slot(p);
+    }
+}
+
+static int process_find_slot(void)
+{
+    for (int i = 0; i < PROC_MAX; i++) {
+        if (!g_procs[i])
+            return i;
+    }
+    return -1;
+}
+
 static process_t *alloc_process(const char *name)
 {
-    process_t *p = NULL;
-    int idx = -1;
+    process_t *p;
+    uint32_t *kbase;
+    uint32_t *ubase;
+    int idx;
 
-    for (int i = 0; i < PROC_MAX; i++) {
-        if (processes[i].state == PROC_UNUSED) {
-            p = &processes[i];
-            idx = i;
-            break;
-        }
+    idx = process_find_slot();
+    if (idx < 0) {
+        process_reap_zombies();
+        idx = process_find_slot();
     }
+    if (idx < 0)
+        return NULL;
+
+    p = process_alloc_struct();
     if (!p)
         return NULL;
 
+    kbase = p->kstack_base;
+    ubase = p->ustack_base;
     memset(p, 0, sizeof(*p));
+    p->kstack_base = kbase;
+    p->ustack_base = ubase;
+    p->slot = idx;
     p->pid = next_pid++;
     p->ppid = current ? current->pid : 0;
     p->state = PROC_READY;
     strncpy(p->name, name, PROC_NAME_MAX - 1);
-    p->kstack_base = kstacks[idx];
-    p->kstack_top = (uint32_t)(kstacks[idx] + (PROC_KSTACK_SIZE / sizeof(uint32_t)));
-    p->ustack_top = (uint32_t)(ustacks[idx] + (PROC_USTACK_SIZE / sizeof(uint32_t)));
+    p->kstack_top = (uint32_t)((uint8_t *)kbase + PROC_KSTACK_SIZE);
+    p->ustack_top = (uint32_t)((uint8_t *)ubase + PROC_USTACK_SIZE);
     p->start_ticks = scheduler_tick_count();
     for (int f = 0; f < VFS_MAX_FD; f++)
         p->fds[f] = -1;
@@ -160,6 +257,8 @@ static process_t *alloc_process(const char *name)
         p->fds[STDERR_FILENO] = cfd;
     }
 
+    g_procs[idx] = p;
+    process_snapshot_mark_dirty();
     return p;
 }
 
@@ -178,24 +277,108 @@ static void setup_kstack(process_t *p, void (*trampoline)(void (*)(void)), void 
 
 void process_init(void)
 {
-    memset(processes, 0, sizeof(processes));
-    for (int i = 0; i < PROC_MAX; i++) {
-        processes[i].state = PROC_UNUSED;
-        for (int f = 0; f < VFS_MAX_FD; f++)
-            processes[i].fds[f] = -1;
-    }
+    memset(g_procs, 0, sizeof(g_procs));
+    g_proc_freelist = NULL;
+    g_exit_graveyard = NULL;
     current = NULL;
+    memset(&g_proc_page, 0, sizeof(g_proc_page));
+    g_proc_page.magic = PROC_PAGE_MAGIC;
+    g_proc_page.seq = 0;
+    g_proc_page_dirty = 1;
+    g_proc_page_last_tick = 0;
+}
+
+void process_reap_graveyard(void)
+{
+    process_t *cur = current;
+    process_t **pp = &g_exit_graveyard;
+
+    while (*pp) {
+        process_t *p = *pp;
+        if (p == cur) {
+            pp = &p->free_next;
+            continue;
+        }
+        *pp = p->free_next;
+        p->free_next = NULL;
+        process_push_freelist(p);
+    }
+}
+
+proc_page_t *process_page_get(void)
+{
+    return &g_proc_page;
+}
+
+void process_snapshot_mark_dirty(void)
+{
+    g_proc_page_dirty = 1;
+}
+
+void process_snapshot_publish(void)
+{
+    uint64_t now = scheduler_tick_count();
+    uint32_t count = 0;
+    uint32_t filled = 0;
+    uint32_t used_ram;
+    uint32_t free_ram;
+    int was_dirty = g_proc_page_dirty;
+
+    /* Refresh at least every 8 scheduler ticks for CPU% samples; sooner if dirty. */
+    if (!was_dirty && now - g_proc_page_last_tick < 8)
+        return;
+
+    used_ram = (uint32_t)heap_used();
+    free_ram = (uint32_t)heap_free();
+
+    g_proc_page.seq++; /* odd = write in progress */
+    __asm__ volatile("" ::: "memory");
+
+    for (int i = 0; i < PROC_MAX; i++) {
+        process_t *p = g_procs[i];
+        if (!p || p->state == PROC_UNUSED)
+            continue;
+        if (filled < PROC_PAGE_MAX) {
+            proc_page_entry_t *dst = &g_proc_page.entries[filled++];
+            memset(dst, 0, sizeof(*dst));
+            dst->pid = p->pid;
+            dst->ppid = p->ppid;
+            dst->state = (uint32_t)p->state;
+            dst->is_user = (uint32_t)p->is_user;
+            dst->cpu_ticks = p->cpu_ticks;
+            dst->uptime_ticks = process_uptime_ticks(p, now);
+            dst->mem_bytes = process_mem_bytes(p);
+            strncpy(dst->name, p->name, sizeof(dst->name) - 1);
+        }
+        count++;
+    }
+
+    g_proc_page.count = filled;
+    g_proc_page.process_count = count;
+    g_proc_page.uptime_ticks = now;
+    g_proc_page.total_cpu_ticks = now;
+    g_proc_page.used_ram_bytes = used_ram;
+    g_proc_page.free_ram_bytes = free_ram;
+    g_proc_page.total_ram_bytes = used_ram + free_ram;
+    if (was_dirty)
+        g_proc_page.generation++;
+
+    __asm__ volatile("" ::: "memory");
+    g_proc_page.seq++; /* even = stable */
+    g_proc_page_dirty = 0;
+    g_proc_page_last_tick = now;
 }
 
 process_t *process_current(void) { return current; }
 void process_set_current(process_t *p) { current = p; }
-process_t *process_table(void) { return processes; }
+process_t **process_table(void) { return g_procs; }
 
 process_t *process_get(pid_t pid)
 {
     for (int i = 0; i < PROC_MAX; i++) {
-        if (processes[i].state != PROC_UNUSED && processes[i].pid == pid)
-            return &processes[i];
+        process_t *p = g_procs[i];
+        if (p && p->state != PROC_UNUSED && p->pid == pid)
+            return p;
     }
     return NULL;
 }
@@ -236,10 +419,10 @@ pid_t process_waitpid(pid_t pid, int *status_out, int options)
         return -ESRCH;
 
     for (int i = 0; i < PROC_MAX; i++) {
-        process_t *p = &processes[i];
+        process_t *p = g_procs[i];
         pid_t child_pid;
 
-        if (p->state == PROC_UNUSED || p->ppid != current->pid)
+        if (!p || p->state == PROC_UNUSED || p->ppid != current->pid)
             continue;
         if (pid > 0 && p->pid != pid)
             continue;
@@ -271,10 +454,22 @@ void process_exit(int code)
     process_free_windows(pid);
     process_free_console(pid);
     current->exit_code = code;
-    if (current->ppid == 0)
-        process_clear_slot(current);
-    else
+    if (current->ppid == 0) {
+        /*
+         * Detach from the table but keep struct/stack alive until
+         * process_reap_graveyard() runs on another process's stack.
+         */
+        int slot = current->slot;
+        if (slot >= 0 && slot < PROC_MAX && g_procs[slot] == current)
+            g_procs[slot] = NULL;
+        current->state = PROC_UNUSED;
+        current->slot = -1;
+        current->free_next = g_exit_graveyard;
+        g_exit_graveyard = current;
+    } else {
         current->state = PROC_ZOMBIE;
+    }
+    process_snapshot_mark_dirty();
     scheduler_on_exit(current);
     schedule();
     for (;;)
@@ -296,8 +491,10 @@ int process_kill(pid_t pid)
     p->exit_code = 137;
     if (p->ppid == 0)
         process_clear_slot(p);
-    else
+    else {
         p->state = PROC_ZOMBIE;
+        process_snapshot_mark_dirty();
+    }
     return 0;
 }
 
@@ -308,18 +505,20 @@ void process_account_tick(process_t *p)
     p->cpu_ticks++;
 }
 
-int process_list(proc_list_entry_t *out, size_t max_entries)
+int process_list_range(proc_list_entry_t *out, size_t max_entries, size_t skip)
 {
     uint64_t now_ticks = scheduler_tick_count();
-    size_t count = 0;
+    size_t total = 0;
+    size_t filled = 0;
 
     for (int i = 0; i < PROC_MAX; i++) {
-        process_t *p = &processes[i];
+        process_t *p = g_procs[i];
 
-        if (p->state == PROC_UNUSED)
+        if (!p || p->state == PROC_UNUSED)
             continue;
-        if (out && count < max_entries) {
-            proc_list_entry_t *dst = &out[count];
+
+        if (total >= skip && out && filled < max_entries) {
+            proc_list_entry_t *dst = &out[filled++];
             memset(dst, 0, sizeof(*dst));
             dst->pid = p->pid;
             dst->ppid = p->ppid;
@@ -330,10 +529,15 @@ int process_list(proc_list_entry_t *out, size_t max_entries)
             dst->mem_bytes = process_mem_bytes(p);
             strncpy(dst->name, p->name, sizeof(dst->name) - 1);
         }
-        count++;
+        total++;
     }
 
-    return (int)count;
+    return (int)total;
+}
+
+int process_list(proc_list_entry_t *out, size_t max_entries)
+{
+    return process_list_range(out, max_entries, 0);
 }
 
 int process_stat(pid_t pid, proc_stat_t *out)
@@ -374,7 +578,7 @@ int process_sysinfo(sys_info_t *out)
     out->total_ram_bytes = out->used_ram_bytes + out->free_ram_bytes;
 
     for (int i = 0; i < PROC_MAX; i++) {
-        if (processes[i].state != PROC_UNUSED)
+        if (g_procs[i] && g_procs[i]->state != PROC_UNUSED)
             out->process_count++;
     }
 

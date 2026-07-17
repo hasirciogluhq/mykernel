@@ -8,24 +8,25 @@ static uint64_t g_scheduler_ticks;
 
 static process_t *pick_next(process_t *cur)
 {
-    process_t *table = process_table();
+    process_t **table = process_table();
+    int start;
 
     if (!cur) {
         for (int i = 0; i < PROC_MAX; i++) {
-            if (table[i].state == PROC_READY)
-                return &table[i];
+            if (table[i] && table[i]->state == PROC_READY)
+                return table[i];
         }
         return NULL;
     }
 
-    int start = (int)(cur - table);
+    start = cur->slot;
     if (start < 0 || start >= PROC_MAX)
         start = 0;
 
     for (int i = 1; i <= PROC_MAX; i++) {
         int idx = (start + i) % PROC_MAX;
-        if (table[idx].state == PROC_READY)
-            return &table[idx];
+        if (table[idx] && table[idx]->state == PROC_READY)
+            return table[idx];
     }
 
     if (cur->state == PROC_READY || cur->state == PROC_RUNNING)
@@ -44,6 +45,7 @@ void schedule(void)
 {
     process_t *cur = process_current();
 
+    process_reap_graveyard();
     service_reap_dead();
     process_t *next = pick_next(cur);
 

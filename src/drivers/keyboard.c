@@ -8,6 +8,8 @@ static int caps_on;
 static int ctrl_on;
 static int alt_on;
 static int altgr_on;
+static int super_on;
+static int menu_on;
 static int e0_prefix;
 
 static uint8_t q[KBD_QSIZE];
@@ -115,6 +117,8 @@ void keyboard_init(void)
     ctrl_on = 0;
     alt_on = 0;
     altgr_on = 0;
+    super_on = 0;
+    menu_on = 0;
     e0_prefix = 0;
     q_head = 0;
     q_tail = 0;
@@ -128,6 +132,8 @@ uint8_t keyboard_modifiers(void)
     if (alt_on)   m |= KBD_MOD_ALT;
     if (altgr_on) m |= KBD_MOD_ALTGR;
     if (caps_on)  m |= KBD_MOD_CAPS;
+    if (super_on) m |= KBD_MOD_SUPER;
+    if (menu_on)  m |= KBD_MOD_MENU;
     return m;
 }
 
@@ -161,6 +167,15 @@ void keyboard_handle_scancode(uint8_t sc)
     }
     if (code == 0x3A && !release && !ext) {
         caps_on = !caps_on;
+        return;
+    }
+    /* E0 Left/Right GUI (Win/Cmd) and Menu / App key */
+    if (ext && (code == 0x5B || code == 0x5C)) {
+        super_on = !release;
+        return;
+    }
+    if (ext && code == 0x5D) {
+        menu_on = !release;
         return;
     }
 

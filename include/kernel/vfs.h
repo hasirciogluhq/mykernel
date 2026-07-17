@@ -5,7 +5,8 @@
 #include <kernel/vfs_api.h>
 #include <kernel/errno.h>
 
-#define VFS_MAX_FD      16
+#define VFS_MAX_FD      256
+#define VFS_MAX_OPEN    8192
 #define VFS_PATH_MAX    256
 
 #define O_RDONLY 0

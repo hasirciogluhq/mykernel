@@ -6,10 +6,11 @@
 #include <user/sdk/syscall.hpp>
 #include <user/sdk/time.hpp>
 #include <user/string.h>
+#include <drivers/keyboard.h>
 
 /*
- * System Settings — gfx API, terminal-clean layout.
- * Desktop & Dock: pin/unpin apps for the dynamic shell dock.
+ * System Settings — gfx API with dropdown / toggle / slider widgets,
+ * native wheel scrolling, and a content scrollbar + thumb.
  */
 
 namespace {
@@ -24,34 +25,47 @@ using hsrc::sdk::kChromeTitleH;
 using hsrc::sdk::settings::theme;
 using hsrc::sdk::settings::refresh_theme;
 
-constexpr int kWinW = 820;
-constexpr int kWinH = 500;
+constexpr int kWinW = 860;
+constexpr int kWinH = 520;
 constexpr int kSidebarW = 200;
 constexpr int kPad = 14;
-constexpr int kRowH = 28;
-constexpr int kRowGap = 6;
+constexpr int kRowH = 36;
+constexpr int kRowGap = 4;
 constexpr int kContentX = kSidebarW + kPad;
-constexpr int kContentW = kWinW - kContentX - kPad;
+constexpr int kContentW = kWinW - kContentX - kPad - 18; /* leave scrollbar lane */
+constexpr int kScrollX = kWinW - 16;
+constexpr int kScrollW = 8;
+constexpr int kContentTop = kChromeTitleH + 52;
+constexpr int kContentBot = kWinH - 12;
+constexpr int kViewH = kContentBot - kContentTop;
 constexpr int kThemePollEvery = 96;
 
 constexpr const char *kIniDir = "/etc";
 constexpr const char *kIniPath = "/etc/os-settings.ini";
 constexpr const char *kDeepLinkPath = "/run/settings.deeplink";
 constexpr size_t kDeepLinkBytes = 128;
-constexpr size_t kIniBytes = 2048;
+constexpr size_t kIniBytes = 4096;
 
 enum CategoryIndex {
     CAT_GENERAL = 0,
     CAT_APPEARANCE,
     CAT_DESKTOP_DOCK,
+    CAT_MOUSE,
     CAT_DATE_TIME,
     CAT_DISPLAY,
     CAT_ABOUT,
     CAT_COUNT
 };
 
+enum WidgetKind {
+    W_DROPDOWN = 0,
+    W_TOGGLE = 1,
+    W_SLIDER = 2,
+};
+
 enum TargetKind {
     TARGET_SETTING = 0,
+    TARGET_SCROLLBAR = 1,
 };
 
 struct Category {
@@ -59,13 +73,16 @@ struct Category {
     const char *label;
 };
 
-struct CycleSetting {
+struct Setting {
     const char *key;
     int category;
     const char *label;
+    WidgetKind kind;
     const char *const *choices;
     int choice_count;
-    int current;
+    int min_v;
+    int max_v;
+    int current; /* choice index OR slider value */
 };
 
 struct ClickTarget {
@@ -79,6 +96,7 @@ constexpr Category kCategories[CAT_COUNT] = {
     { "general", "General" },
     { "appearance", "Appearance" },
     { "desktop-dock", "Desktop & Dock" },
+    { "mouse", "Mouse & Wheel" },
     { "date-time", "Date & Time" },
     { "display", "Display" },
     { "about", "About" },
@@ -90,23 +108,33 @@ constexpr const char *kMotionChoices[] = { "Fast", "Reduced" };
 constexpr const char *kOnOffChoices[] = { "On", "Off" };
 constexpr const char *kDockChoices[] = { "Small", "Medium", "Large" };
 constexpr const char *kWallpaperChoices[] = { "Cover", "Center", "Stretch" };
+constexpr const char *kMagSpeedChoices[] = { "Fast", "Normal", "Slow" };
 constexpr const char *kClockChoices[] = { "24-hour", "12-hour" };
 constexpr const char *kTimezoneChoices[] = {
     "UTC-8", "UTC-5", "UTC", "UTC+1", "UTC+3", "UTC+8", "UTC+9"
 };
 
-CycleSetting g_settings[] = {
-    { "general.appearance", CAT_APPEARANCE, "Appearance", kAppearanceChoices, 3, 0 },
-    { "general.accent", CAT_APPEARANCE, "Accent Color", kAccentChoices, 3, 0 },
-    { "general.motion", CAT_APPEARANCE, "Animation Speed", kMotionChoices, 2, 0 },
-    { "desktop.dock-size", CAT_DESKTOP_DOCK, "Dock Size", kDockChoices, 3, 1 },
-    { "desktop.wallpaper", CAT_DESKTOP_DOCK, "Wallpaper Fit", kWallpaperChoices, 3, 0 },
-    { "dock.pin.monitor", CAT_DESKTOP_DOCK, "Pin Activity Monitor", kOnOffChoices, 2, 0 },
-    { "dock.pin.terminal", CAT_DESKTOP_DOCK, "Pin Terminal", kOnOffChoices, 2, 0 },
-    { "dock.pin.files", CAT_DESKTOP_DOCK, "Pin Files", kOnOffChoices, 2, 0 },
-    { "dock.pin.settings", CAT_DESKTOP_DOCK, "Pin System Settings", kOnOffChoices, 2, 0 },
-    { "datetime.clock", CAT_DATE_TIME, "Clock Format", kClockChoices, 2, 0 },
-    { "datetime.timezone", CAT_DATE_TIME, "Timezone", kTimezoneChoices, 7, 4 },
+Setting g_settings[] = {
+    { "general.appearance", CAT_APPEARANCE, "Appearance", W_DROPDOWN, kAppearanceChoices, 3, 0, 0, 0 },
+    { "general.accent", CAT_APPEARANCE, "Accent Color", W_DROPDOWN, kAccentChoices, 3, 0, 0, 0 },
+    { "general.motion", CAT_APPEARANCE, "Animation Speed", W_DROPDOWN, kMotionChoices, 2, 0, 0, 0 },
+
+    { "desktop.dock-size", CAT_DESKTOP_DOCK, "Dock Size", W_DROPDOWN, kDockChoices, 3, 0, 0, 1 },
+    { "desktop.wallpaper", CAT_DESKTOP_DOCK, "Wallpaper Fit", W_DROPDOWN, kWallpaperChoices, 3, 0, 0, 0 },
+    { "dock.magnification", CAT_DESKTOP_DOCK, "Magnification", W_TOGGLE, kOnOffChoices, 2, 0, 0, 0 },
+    { "dock.mag-size", CAT_DESKTOP_DOCK, "Magnification Size", W_SLIDER, nullptr, 0, 4, 40, 18 },
+    { "dock.mag-range", CAT_DESKTOP_DOCK, "Magnification Range", W_SLIDER, nullptr, 0, 60, 220, 132 },
+    { "dock.mag-speed", CAT_DESKTOP_DOCK, "Magnification Speed", W_DROPDOWN, kMagSpeedChoices, 3, 0, 0, 1 },
+    { "dock.pin.monitor", CAT_DESKTOP_DOCK, "Pin Activity Monitor", W_TOGGLE, kOnOffChoices, 2, 0, 0, 0 },
+    { "dock.pin.terminal", CAT_DESKTOP_DOCK, "Pin Terminal", W_TOGGLE, kOnOffChoices, 2, 0, 0, 0 },
+    { "dock.pin.files", CAT_DESKTOP_DOCK, "Pin Files", W_TOGGLE, kOnOffChoices, 2, 0, 0, 0 },
+    { "dock.pin.settings", CAT_DESKTOP_DOCK, "Pin System Settings", W_TOGGLE, kOnOffChoices, 2, 0, 0, 0 },
+
+    { "mouse.natural-scroll", CAT_MOUSE, "Natural Scroll", W_TOGGLE, kOnOffChoices, 2, 0, 0, 1 },
+    { "mouse.wheel-lines", CAT_MOUSE, "Wheel Lines", W_SLIDER, nullptr, 0, 1, 8, 3 },
+
+    { "datetime.clock", CAT_DATE_TIME, "Clock Format", W_DROPDOWN, kClockChoices, 2, 0, 0, 0 },
+    { "datetime.timezone", CAT_DATE_TIME, "Timezone", W_DROPDOWN, kTimezoneChoices, 7, 0, 0, 4 },
 };
 
 constexpr int kSettingCount = (int)(sizeof(g_settings) / sizeof(g_settings[0]));
@@ -118,14 +146,28 @@ Input g_prev_input{};
 bool g_dirty = true;
 int g_theme_poll = 0;
 int g_clock_poll = 0;
+int g_opts_poll = 0;
 char g_last_live_clock[32] = "";
 int g_active_category = CAT_GENERAL;
 int g_hover_sidebar = -1;
 int g_hover_setting = -1;
+constexpr int kOptsPollEvery = 32;
 int g_deeplink_cooldown = 0;
-ClickTarget g_targets[32];
+ClickTarget g_targets[48];
 int g_target_count = 0;
 bool g_was_minimized = false;
+
+int g_scroll_y = 0;
+int g_content_h = 0;
+int g_drag_slider = -1; /* setting index while dragging slider */
+int g_drag_scroll = 0;
+int g_wheel_lines = 3;
+bool g_natural_scroll = true;
+
+/* Live input probe (Mouse & Wheel page). */
+int32_t g_last_wheel = 0;
+uint8_t g_last_buttons = 0;
+uint8_t g_last_mods = 0;
 
 void append_text(char *dst, size_t dst_size, const char *src)
 {
@@ -156,9 +198,28 @@ void append_uint(char *dst, size_t dst_size, uint32_t value)
     }
 }
 
+void append_int(char *dst, size_t dst_size, int value)
+{
+    if (value < 0) {
+        append_text(dst, dst_size, "-");
+        append_uint(dst, dst_size, (uint32_t)(-value));
+    } else {
+        append_uint(dst, dst_size, (uint32_t)value);
+    }
+}
+
 int text_width(const char *s)
 {
     return Surface::text_width(s, 1);
+}
+
+int clampi(int v, int lo, int hi)
+{
+    if (v < lo)
+        return lo;
+    if (v > hi)
+        return hi;
+    return v;
 }
 
 void register_target(int y, int h, int kind, int index)
@@ -187,11 +248,45 @@ bool refresh_window_options()
     return true;
 }
 
+int setting_index(const char *key)
+{
+    for (int i = 0; i < kSettingCount; i++) {
+        if (strcmp(g_settings[i].key, key) == 0)
+            return i;
+    }
+    return -1;
+}
+
+void sync_mouse_prefs()
+{
+    int i = setting_index("mouse.wheel-lines");
+    if (i >= 0)
+        g_wheel_lines = clampi(g_settings[i].current, 1, 8);
+    i = setting_index("mouse.natural-scroll");
+    if (i >= 0)
+        g_natural_scroll = (g_settings[i].current == 0); /* On = index 0 */
+}
+
+void format_setting_value(const Setting &s, char *out, size_t out_size)
+{
+    out[0] = 0;
+    if (s.kind == W_SLIDER) {
+        append_int(out, out_size, s.current);
+        return;
+    }
+    if (s.choices && s.current >= 0 && s.current < s.choice_count)
+        append_text(out, out_size, s.choices[s.current]);
+}
+
 void apply_time_settings()
 {
     (void)hsrc::sdk::time::init();
     for (int i = 0; i < kSettingCount; i++) {
-        const char *value = g_settings[i].choices[g_settings[i].current];
+        if (g_settings[i].kind == W_SLIDER)
+            continue;
+        const char *value = g_settings[i].choices
+                                ? g_settings[i].choices[g_settings[i].current]
+                                : "";
         if (strcmp(g_settings[i].key, "datetime.timezone") == 0) {
             int off = 0;
             if (hsrc::sdk::time::parse_timezone_label(value, &off))
@@ -210,14 +305,41 @@ void save_settings()
         return;
 
     for (int i = 0; i < kSettingCount; i++) {
-        const char *value = g_settings[i].choices[g_settings[i].current];
+        char val[32];
+        format_setting_value(g_settings[i], val, sizeof(val));
         (void)hsrc::sdk::write(fd, g_settings[i].key, strlen(g_settings[i].key));
         (void)hsrc::sdk::write(fd, "=", 1);
-        (void)hsrc::sdk::write(fd, value, strlen(value));
+        (void)hsrc::sdk::write(fd, val, strlen(val));
         (void)hsrc::sdk::write(fd, "\n", 1);
     }
     (void)hsrc::sdk::close(fd);
     apply_time_settings();
+    sync_mouse_prefs();
+}
+
+int parse_int(const char *s, int *ok)
+{
+    if (!s || !s[0]) {
+        if (ok)
+            *ok = 0;
+        return 0;
+    }
+    int neg = 0;
+    int i = 0;
+    if (s[0] == '-') {
+        neg = 1;
+        i = 1;
+    }
+    int v = 0;
+    int digits = 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        v = v * 10 + (s[i] - '0');
+        i++;
+        digits++;
+    }
+    if (ok)
+        *ok = digits > 0;
+    return neg ? -v : v;
 }
 
 void load_settings()
@@ -253,15 +375,23 @@ void load_settings()
         for (int s = 0; s < kSettingCount; s++) {
             if (strcmp(line, g_settings[s].key) != 0)
                 continue;
-            for (int c = 0; c < g_settings[s].choice_count; c++) {
-                if (strcmp(eq, g_settings[s].choices[c]) == 0) {
-                    g_settings[s].current = c;
-                    break;
+            if (g_settings[s].kind == W_SLIDER) {
+                int ok = 0;
+                int v = parse_int(eq, &ok);
+                if (ok)
+                    g_settings[s].current = clampi(v, g_settings[s].min_v, g_settings[s].max_v);
+            } else {
+                for (int c = 0; c < g_settings[s].choice_count; c++) {
+                    if (strcmp(eq, g_settings[s].choices[c]) == 0) {
+                        g_settings[s].current = c;
+                        break;
+                    }
                 }
             }
             break;
         }
     }
+    sync_mouse_prefs();
 }
 
 int category_from_id(const char *id)
@@ -270,6 +400,8 @@ int category_from_id(const char *id)
         return CAT_GENERAL;
     if (strcmp(id, "system-information") == 0 || strcmp(id, "about") == 0)
         return CAT_ABOUT;
+    if (strcmp(id, "input") == 0 || strcmp(id, "keyboard") == 0)
+        return CAT_MOUSE;
     for (int i = 0; i < CAT_COUNT; i++) {
         if (strcmp(id, kCategories[i].id) == 0)
             return i;
@@ -316,6 +448,32 @@ void poll_deeplink()
 
     g_active_category = category_from_id(clean);
     g_hover_setting = -1;
+    g_scroll_y = 0;
+    g_dirty = true;
+}
+
+int max_scroll()
+{
+    int m = g_content_h - kViewH;
+    return m > 0 ? m : 0;
+}
+
+void clamp_scroll()
+{
+    g_scroll_y = clampi(g_scroll_y, 0, max_scroll());
+}
+
+void apply_wheel(int32_t wheel)
+{
+    if (wheel == 0)
+        return;
+    g_last_wheel = wheel;
+    int32_t delta = wheel;
+    if (g_natural_scroll)
+        delta = -delta;
+    /* PS/2: +wheel often means away from user; natural maps like macOS. */
+    g_scroll_y -= (int)delta * kRowH * g_wheel_lines;
+    clamp_scroll();
     g_dirty = true;
 }
 
@@ -334,10 +492,19 @@ int sidebar_hit(int lx, int ly)
 
 const ClickTarget *target_hit(int lx, int ly)
 {
-    if (lx < kContentX || lx >= kContentX + kContentW)
-        return nullptr;
+    int content_ly = ly + g_scroll_y;
     for (int i = 0; i < g_target_count; i++) {
-        if (ly >= g_targets[i].y && ly < g_targets[i].y + g_targets[i].h)
+        if (g_targets[i].kind == TARGET_SCROLLBAR) {
+            if (lx >= kScrollX - 2 && lx < kScrollX + kScrollW + 2 &&
+                ly >= kContentTop && ly < kContentBot)
+                return &g_targets[i];
+            continue;
+        }
+        if (lx < kContentX || lx >= kContentX + kContentW)
+            continue;
+        if (ly < kContentTop || ly >= kContentBot)
+            continue;
+        if (content_ly >= g_targets[i].y && content_ly < g_targets[i].y + g_targets[i].h)
             return &g_targets[i];
     }
     return nullptr;
@@ -347,25 +514,38 @@ void cycle_setting(int idx)
 {
     if (idx < 0 || idx >= kSettingCount)
         return;
-    g_settings[idx].current++;
-    if (g_settings[idx].current >= g_settings[idx].choice_count)
-        g_settings[idx].current = 0;
+    Setting &s = g_settings[idx];
+    if (s.kind == W_SLIDER)
+        return;
+    s.current++;
+    if (s.current >= s.choice_count)
+        s.current = 0;
     save_settings();
     (void)refresh_theme();
     g_dirty = true;
 }
 
-void draw_row(Surface &s, int y, const char *label, const char *value, bool interactive, bool hover)
+void set_slider_from_x(int idx, int lx)
 {
-    const auto &t = theme();
-    if (hover && interactive)
-        s.fill(kContentX, y, kContentW, kRowH, t.hover);
-    s.text(kContentX + 4, y + 8, label, t.text, 1);
-    int value_x = kContentX + kContentW - 4 - text_width(value);
-    if (value_x < kContentX + 200)
-        value_x = kContentX + 200;
-    s.text(value_x, y + 8, value, interactive ? t.accent : t.text_dim, 1);
-    s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
+    if (idx < 0 || idx >= kSettingCount)
+        return;
+    Setting &s = g_settings[idx];
+    if (s.kind != W_SLIDER)
+        return;
+    const int track_x = kContentX + kContentW - 160;
+    const int track_w = 140;
+    int t = lx - track_x;
+    t = clampi(t, 0, track_w);
+    int span = s.max_v - s.min_v;
+    if (span <= 0)
+        span = 1;
+    int v = s.min_v + (t * span) / track_w;
+    v = clampi(v, s.min_v, s.max_v);
+    if (v != s.current) {
+        s.current = v;
+        save_settings();
+        g_dirty = true;
+    }
 }
 
 void draw_sidebar(Surface &s)
@@ -389,120 +569,105 @@ void draw_sidebar(Surface &s)
     }
 }
 
-void draw_settings_for_category(Surface &s, int cat, const char *hint)
+void draw_scrollbar(Surface &s)
+{
+    const auto &t = theme();
+    int max_s = max_scroll();
+    if (max_s <= 0)
+        return;
+
+    s.fill_round(kScrollX, kContentTop, kScrollW, kViewH, 4, t.inset);
+    int thumb_h = (kViewH * kViewH) / g_content_h;
+    if (thumb_h < 24)
+        thumb_h = 24;
+    if (thumb_h > kViewH)
+        thumb_h = kViewH;
+    int thumb_y = kContentTop + (g_scroll_y * (kViewH - thumb_h)) / max_s;
+    s.fill_round(kScrollX, thumb_y, kScrollW, thumb_h, 4, t.accent);
+    register_target(0, 0, TARGET_SCROLLBAR, 0);
+}
+
+void draw_dropdown_row(Surface &s, int y, int idx, bool hover)
+{
+    const auto &t = theme();
+    const Setting &st = g_settings[idx];
+    char val[40];
+    format_setting_value(st, val, sizeof(val));
+
+    if (hover)
+        s.fill(kContentX, y, kContentW, kRowH, t.hover);
+    s.text(kContentX + 4, y + 12, st.label, t.text, 1);
+
+    const int bx = kContentX + kContentW - 150;
+    s.fill_round(bx, y + 6, 140, kRowH - 12, 6, t.button);
+    s.rect(bx, y + 6, 140, kRowH - 12, hover ? t.accent : t.border, 1);
+    s.text(bx + 10, y + 12, val, t.accent, 1);
+    s.text(bx + 120, y + 12, "v", t.text_dim, 1);
+    s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
+    register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
+}
+
+void draw_toggle_row(Surface &s, int y, int idx, bool hover)
+{
+    const auto &t = theme();
+    const Setting &st = g_settings[idx];
+    bool on = (st.current == 0);
+
+    if (hover)
+        s.fill(kContentX, y, kContentW, kRowH, t.hover);
+    s.text(kContentX + 4, y + 12, st.label, t.text, 1);
+
+    const int bx = kContentX + kContentW - 56;
+    s.fill_round(bx, y + 10, 44, 16, 8, on ? t.accent : t.inset);
+    int knob_x = on ? bx + 26 : bx + 2;
+    s.fill_round(knob_x, y + 12, 12, 12, 6, t.panel);
+    s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
+    register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
+}
+
+void draw_slider_row(Surface &s, int y, int idx, bool hover)
+{
+    const auto &t = theme();
+    const Setting &st = g_settings[idx];
+    char val[16];
+    format_setting_value(st, val, sizeof(val));
+
+    if (hover)
+        s.fill(kContentX, y, kContentW, kRowH, t.hover);
+    s.text(kContentX + 4, y + 12, st.label, t.text, 1);
+    s.text(kContentX + kContentW - 200, y + 12, val, t.accent, 1);
+
+    const int track_x = kContentX + kContentW - 160;
+    const int track_w = 140;
+    const int track_y = y + kRowH / 2 - 2;
+    s.fill_round(track_x, track_y, track_w, 4, 2, t.inset);
+    int span = st.max_v - st.min_v;
+    if (span <= 0)
+        span = 1;
+    int thumb = ((st.current - st.min_v) * track_w) / span;
+    s.fill_round(track_x, track_y, thumb, 4, 2, t.accent);
+    s.fill_round(track_x + thumb - 5, track_y - 4, 10, 12, 5, t.accent);
+    s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
+    register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
+}
+
+void begin_page(Surface &s, const char *title, const char *hint)
 {
     const auto &t = theme();
     g_target_count = 0;
-
-    s.text(kContentX, kChromeTitleH + 12, kCategories[cat].label, t.text, 1);
+    s.text(kContentX, kChromeTitleH + 12, title, t.text, 1);
     s.text(kContentX, kChromeTitleH + 30, hint, t.text_dim, 1);
-
-    int y = kChromeTitleH + 56;
-    for (int i = 0; i < kSettingCount; i++) {
-        if (g_settings[i].category != cat)
-            continue;
-        bool hover = (i == g_hover_setting);
-        draw_row(s, y, g_settings[i].label,
-                 g_settings[i].choices[g_settings[i].current], true, hover);
-        register_target(y, kRowH, TARGET_SETTING, i);
-        y += kRowH + kRowGap;
-    }
 }
 
-void draw_display_page(Surface &s)
+void draw_info_row(Surface &s, int y, const char *label, const char *value)
 {
     const auto &t = theme();
-    g_target_count = 0;
-
-    char resolution[40];
-    char depth[24];
-    resolution[0] = 0;
-    append_uint(resolution, sizeof(resolution), g_screen.width);
-    append_text(resolution, sizeof(resolution), " x ");
-    append_uint(resolution, sizeof(resolution), g_screen.height);
-    depth[0] = 0;
-    append_uint(depth, sizeof(depth), g_screen.bpp);
-    append_text(depth, sizeof(depth), "-bit");
-
-    s.text(kContentX, kChromeTitleH + 12, "Display", t.text, 1);
-    s.text(kContentX, kChromeTitleH + 30, "Live screen_info() readout.", t.text_dim, 1);
-
-    int y = kChromeTitleH + 56;
-    draw_row(s, y, "Resolution", resolution, false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "Color Depth", depth, false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "Window Server", "MKDX", false, false);
-}
-
-void draw_datetime_page(Surface &s)
-{
-    const auto &t = theme();
-    g_target_count = 0;
-
-    char live[48];
-    char iso[40];
-    hsrc::sdk::time::format_clock(live, sizeof(live));
-    hsrc::sdk::time::format_iso_local(iso, sizeof(iso));
-
-    s.text(kContentX, kChromeTitleH + 12, "Date & Time", t.text, 1);
-    s.text(kContentX, kChromeTitleH + 30,
-           "Timezone and clock format drive the menubar clock.", t.text_dim, 1);
-
-    int y = kChromeTitleH + 56;
-    draw_row(s, y, "Now (local)", live, false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "ISO local", iso, false, false);
-    y += kRowH + kRowGap;
-
-    for (int i = 0; i < kSettingCount; i++) {
-        if (g_settings[i].category != CAT_DATE_TIME)
-            continue;
-        bool hover = (g_hover_setting == i);
-        draw_row(s, y, g_settings[i].label, g_settings[i].choices[g_settings[i].current],
-                 true, hover);
-        register_target(y, kRowH, TARGET_SETTING, i);
-        y += kRowH + kRowGap;
-    }
-}
-
-void draw_about_page(Surface &s)
-{
-    const auto &t = theme();
-    g_target_count = 0;
-
-    char resolution[40];
-    resolution[0] = 0;
-    append_uint(resolution, sizeof(resolution), g_screen.width);
-    append_text(resolution, sizeof(resolution), " x ");
-    append_uint(resolution, sizeof(resolution), g_screen.height);
-
-    s.text(kContentX, kChromeTitleH + 12, "About", t.text, 1);
-    s.text(kContentX, kChromeTitleH + 30, "HSRC OS control center.", t.text_dim, 1);
-
-    int y = kChromeTitleH + 56;
-    draw_row(s, y, "Product", "HSRC OS", false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "Settings", "os-settings.mke", false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "Display", resolution, false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "Dock", "pinned | running unpinned", false, false);
-}
-
-void draw_general_page(Surface &s)
-{
-    const auto &t = theme();
-    g_target_count = 0;
-    s.text(kContentX, kChromeTitleH + 12, "General", t.text, 1);
-    s.text(kContentX, kChromeTitleH + 30, "Shell, dock and appearance live under their tabs.", t.text_dim, 1);
-
-    int y = kChromeTitleH + 56;
-    draw_row(s, y, "Ini path", "/etc/os-settings.ini", false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "Dock layout", "pinned | live unpinned", false, false);
-    y += kRowH + kRowGap;
-    draw_row(s, y, "Tip", "Use Desktop & Dock to pin apps", false, false);
+    s.text(kContentX + 4, y + 12, label, t.text, 1);
+    int value_x = kContentX + kContentW - 4 - text_width(value);
+    if (value_x < kContentX + 200)
+        value_x = kContentX + 200;
+    s.text(value_x, y + 12, value, t.text_dim, 1);
+    s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
 }
 
 void paint()
@@ -516,31 +681,219 @@ void paint()
     s.draw_window_chrome(kWinW, g_win_opts.title, g_win_opts, t.chrome, t.text, t.border);
     draw_sidebar(s);
 
+    /* Clip content band by filling over later? Simple approach: draw rows with scroll offset. */
+    int y = kContentTop - g_scroll_y;
+    int y_start = y;
+
+    auto visible = [&](int row_y) -> bool {
+        return row_y + kRowH > kContentTop && row_y < kContentBot;
+    };
+
+    g_target_count = 0;
+
     switch (g_active_category) {
     case CAT_GENERAL:
-        draw_general_page(s);
+        begin_page(s, "General", "Shell preferences and tips.");
+        y = kContentTop - g_scroll_y;
+        if (visible(y))
+            draw_info_row(s, y, "Ini path", "/etc/os-settings.ini");
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Dock layout", "pinned | live unpinned");
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Tip", "Desktop & Dock → magnification sliders");
+        y += kRowH + kRowGap;
         break;
+
     case CAT_APPEARANCE:
-        draw_settings_for_category(s, CAT_APPEARANCE, "Click a row to cycle. Persists to ini.");
+        begin_page(s, "Appearance", "Dropdowns cycle on click.");
+        y = kContentTop - g_scroll_y;
+        for (int i = 0; i < kSettingCount; i++) {
+            if (g_settings[i].category != CAT_APPEARANCE)
+                continue;
+            if (visible(y)) {
+                if (g_settings[i].kind == W_DROPDOWN)
+                    draw_dropdown_row(s, y, i, i == g_hover_setting);
+                else if (g_settings[i].kind == W_TOGGLE)
+                    draw_toggle_row(s, y, i, i == g_hover_setting);
+                else
+                    draw_slider_row(s, y, i, i == g_hover_setting);
+            } else {
+                /* Still register for hit-testing in scrolled space */
+                register_target(y + g_scroll_y, kRowH, TARGET_SETTING, i);
+            }
+            y += kRowH + kRowGap;
+        }
         break;
+
     case CAT_DESKTOP_DOCK:
-        draw_settings_for_category(s, CAT_DESKTOP_DOCK,
-                                   "Pinned stay centered; unpinned open apps sit right of |");
+        begin_page(s, "Desktop & Dock", "Magnification size/range + pins. Scroll with wheel.");
+        y = kContentTop - g_scroll_y;
+        for (int i = 0; i < kSettingCount; i++) {
+            if (g_settings[i].category != CAT_DESKTOP_DOCK)
+                continue;
+            if (visible(y)) {
+                if (g_settings[i].kind == W_SLIDER)
+                    draw_slider_row(s, y, i, i == g_hover_setting);
+                else if (g_settings[i].kind == W_TOGGLE)
+                    draw_toggle_row(s, y, i, i == g_hover_setting);
+                else
+                    draw_dropdown_row(s, y, i, i == g_hover_setting);
+            } else {
+                register_target(y + g_scroll_y, kRowH, TARGET_SETTING, i);
+            }
+            y += kRowH + kRowGap;
+        }
         break;
-    case CAT_DATE_TIME:
-        draw_datetime_page(s);
-        break;
-    case CAT_DISPLAY:
-        draw_display_page(s);
-        break;
-    case CAT_ABOUT:
-        draw_about_page(s);
-        break;
-    default:
-        draw_general_page(s);
+
+    case CAT_MOUSE: {
+        begin_page(s, "Mouse & Wheel", "Native IntelliMouse wheel + side buttons + Super/Menu.");
+        y = kContentTop - g_scroll_y;
+
+        char wbuf[32];
+        char bbuf[48];
+        char mbuf[48];
+        wbuf[0] = 0;
+        append_int(wbuf, sizeof(wbuf), (int)g_last_wheel);
+        bbuf[0] = 0;
+        if (g_last_buttons & UGX_BTN_LEFT)
+            append_text(bbuf, sizeof(bbuf), "L ");
+        if (g_last_buttons & UGX_BTN_RIGHT)
+            append_text(bbuf, sizeof(bbuf), "R ");
+        if (g_last_buttons & UGX_BTN_MIDDLE)
+            append_text(bbuf, sizeof(bbuf), "M ");
+        if (g_last_buttons & UGX_BTN_BACK)
+            append_text(bbuf, sizeof(bbuf), "Back ");
+        if (g_last_buttons & UGX_BTN_FORWARD)
+            append_text(bbuf, sizeof(bbuf), "Fwd ");
+        if (!bbuf[0])
+            append_text(bbuf, sizeof(bbuf), "(none)");
+        mbuf[0] = 0;
+        if (g_last_mods & KBD_MOD_SHIFT)
+            append_text(mbuf, sizeof(mbuf), "Shift ");
+        if (g_last_mods & KBD_MOD_CTRL)
+            append_text(mbuf, sizeof(mbuf), "Ctrl ");
+        if (g_last_mods & KBD_MOD_ALT)
+            append_text(mbuf, sizeof(mbuf), "Alt ");
+        if (g_last_mods & KBD_MOD_ALTGR)
+            append_text(mbuf, sizeof(mbuf), "AltGr ");
+        if (g_last_mods & KBD_MOD_SUPER)
+            append_text(mbuf, sizeof(mbuf), "Super ");
+        if (g_last_mods & KBD_MOD_MENU)
+            append_text(mbuf, sizeof(mbuf), "Menu ");
+        if (!mbuf[0])
+            append_text(mbuf, sizeof(mbuf), "(none)");
+
+        if (visible(y))
+            draw_info_row(s, y, "Last wheel delta", wbuf);
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Buttons", bbuf);
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Modifiers", mbuf);
+        y += kRowH + kRowGap;
+
+        for (int i = 0; i < kSettingCount; i++) {
+            if (g_settings[i].category != CAT_MOUSE)
+                continue;
+            if (visible(y)) {
+                if (g_settings[i].kind == W_SLIDER)
+                    draw_slider_row(s, y, i, i == g_hover_setting);
+                else if (g_settings[i].kind == W_TOGGLE)
+                    draw_toggle_row(s, y, i, i == g_hover_setting);
+                else
+                    draw_dropdown_row(s, y, i, i == g_hover_setting);
+            } else {
+                register_target(y + g_scroll_y, kRowH, TARGET_SETTING, i);
+            }
+            y += kRowH + kRowGap;
+        }
         break;
     }
 
+    case CAT_DATE_TIME: {
+        begin_page(s, "Date & Time", "Timezone and clock format drive the menubar clock.");
+        y = kContentTop - g_scroll_y;
+        char live[48];
+        char iso[40];
+        hsrc::sdk::time::format_clock(live, sizeof(live));
+        hsrc::sdk::time::format_iso_local(iso, sizeof(iso));
+        if (visible(y))
+            draw_info_row(s, y, "Now (local)", live);
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "ISO local", iso);
+        y += kRowH + kRowGap;
+        for (int i = 0; i < kSettingCount; i++) {
+            if (g_settings[i].category != CAT_DATE_TIME)
+                continue;
+            if (visible(y))
+                draw_dropdown_row(s, y, i, i == g_hover_setting);
+            else
+                register_target(y + g_scroll_y, kRowH, TARGET_SETTING, i);
+            y += kRowH + kRowGap;
+        }
+        break;
+    }
+
+    case CAT_DISPLAY: {
+        begin_page(s, "Display", "Live screen_info() readout.");
+        y = kContentTop - g_scroll_y;
+        char resolution[40];
+        char depth[24];
+        resolution[0] = 0;
+        append_uint(resolution, sizeof(resolution), g_screen.width);
+        append_text(resolution, sizeof(resolution), " x ");
+        append_uint(resolution, sizeof(resolution), g_screen.height);
+        depth[0] = 0;
+        append_uint(depth, sizeof(depth), g_screen.bpp);
+        append_text(depth, sizeof(depth), "-bit");
+        if (visible(y))
+            draw_info_row(s, y, "Resolution", resolution);
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Color Depth", depth);
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Window Server", "MKDX");
+        y += kRowH + kRowGap;
+        break;
+    }
+
+    case CAT_ABOUT:
+    default: {
+        begin_page(s, "About", "HSRC OS control center.");
+        y = kContentTop - g_scroll_y;
+        if (visible(y))
+            draw_info_row(s, y, "Product", "HSRC OS");
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Settings", "os-settings.mke");
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Dock", "pinned | running unpinned");
+        y += kRowH + kRowGap;
+        if (visible(y))
+            draw_info_row(s, y, "Input", "wheel · side · Super/Menu");
+        y += kRowH + kRowGap;
+        break;
+    }
+    }
+
+    g_content_h = (y + g_scroll_y) - kContentTop + 8;
+    if (g_content_h < kViewH)
+        g_content_h = kViewH;
+    clamp_scroll();
+
+    /* Cover chrome/header over scrolled overflow */
+    s.fill(kSidebarW, kChromeTitleH, kWinW - kSidebarW, kContentTop - kChromeTitleH, t.bg);
+    s.text(kContentX, kChromeTitleH + 12, kCategories[g_active_category].label, t.text, 1);
+
+    draw_scrollbar(s);
+
+    (void)y_start;
     g_win.damage();
     g_dirty = false;
 }
@@ -580,10 +933,28 @@ void handle_click(const Input &in)
         return;
     }
 
-    if (lx >= kContentX) {
-        const ClickTarget *hit = target_hit(lx, ly);
-        if (hit && hit->kind == TARGET_SETTING) {
-            cycle_setting(hit->index);
+    const ClickTarget *hit = target_hit(lx, ly);
+    if (hit && hit->kind == TARGET_SCROLLBAR) {
+        g_drag_scroll = 1;
+        int max_s = max_scroll();
+        if (max_s > 0) {
+            int rel = ly - kContentTop;
+            g_scroll_y = (rel * max_s) / kViewH;
+            clamp_scroll();
+            g_dirty = true;
+        }
+        return;
+    }
+
+    if (hit && hit->kind == TARGET_SETTING) {
+        int idx = hit->index;
+        if (idx >= 0 && idx < kSettingCount) {
+            if (g_settings[idx].kind == W_SLIDER) {
+                g_drag_slider = idx;
+                set_slider_from_x(idx, lx);
+                return;
+            }
+            cycle_setting(idx);
             return;
         }
     }
@@ -592,6 +963,7 @@ void handle_click(const Input &in)
     if (cat >= 0 && g_active_category != cat) {
         g_active_category = cat;
         g_hover_setting = -1;
+        g_scroll_y = 0;
         g_dirty = true;
     }
 }
@@ -610,6 +982,7 @@ extern "C" void mke_main(void)
     load_settings();
     (void)refresh_theme();
     apply_time_settings();
+    sync_mouse_prefs();
 
     WindowOptions opts;
     opts.x = (int)g_screen.width > kWinW ? ((int)g_screen.width - kWinW) / 2 : 40;
@@ -628,10 +1001,8 @@ extern "C" void mke_main(void)
     opts.set_title("System Settings");
     opts.set_class_name("os.settings");
 
-    if (!g_win.create(opts)) {
-        for (;;)
-            hsrc::sdk::yield();
-    }
+    if (!g_win.create(opts))
+        hsrc::sdk::exit(1);
     (void)refresh_window_options();
 
     g_win.show(true);
@@ -655,7 +1026,6 @@ extern "C" void mke_main(void)
                 g_dirty = true;
         }
 
-        /* Live clock on Date & Time page — shared time page, no gettime spam. */
         if (g_active_category == CAT_DATE_TIME) {
             if (++g_clock_poll >= 8) {
                 g_clock_poll = 0;
@@ -669,19 +1039,55 @@ extern "C" void mke_main(void)
             }
         }
 
-        (void)refresh_window_options();
+        g_opts_poll++;
+        if (g_opts_poll >= kOptsPollEvery) {
+            g_opts_poll = 0;
+            (void)refresh_window_options();
+        }
 
         Input in{};
         if (hsrc::sdk::input(in)) {
+            const bool moved = in.mouse_x != g_prev_input.mouse_x ||
+                               in.mouse_y != g_prev_input.mouse_y;
+            const uint8_t btn_delta = (uint8_t)(in.buttons ^ g_prev_input.buttons);
+            if (moved || btn_delta || in.wheel != 0) {
+                g_opts_poll = kOptsPollEvery;
+                (void)refresh_window_options();
+            }
+
             const bool interactive = !g_win_opts.minimized && g_win_opts.visible;
+
+            if (in.wheel != 0 && interactive && in.focus_id == g_win.id())
+                apply_wheel(in.wheel);
+
+            if (in.buttons != g_last_buttons || in.mods != g_last_mods || in.wheel != 0) {
+                g_last_buttons = in.buttons;
+                g_last_mods = in.mods;
+                if (g_active_category == CAT_MOUSE)
+                    g_dirty = true;
+            }
+
             if (interactive) {
                 int lx = in.mouse_x - g_win_opts.x;
                 int ly = in.mouse_y - g_win_opts.y;
                 if (lx >= 0 && ly >= 0 && lx < g_win_opts.w && ly < g_win_opts.h)
                     update_hover(lx, ly);
+
+                if (g_drag_slider >= 0 && (in.buttons & UGX_BTN_LEFT))
+                    set_slider_from_x(g_drag_slider, lx);
+                if (g_drag_scroll && (in.buttons & UGX_BTN_LEFT)) {
+                    int max_s = max_scroll();
+                    if (max_s > 0) {
+                        int rel = ly - kContentTop;
+                        g_scroll_y = clampi((rel * max_s) / kViewH, 0, max_s);
+                        g_dirty = true;
+                    }
+                }
             }
 
             uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_input.buttons);
+            uint8_t released = (uint8_t)(g_prev_input.buttons & ~in.buttons);
+
             if (pressed & UGX_BTN_LEFT) {
                 int click_lx = in.mouse_x - g_win_opts.x;
                 int click_ly = in.mouse_y - g_win_opts.y;
@@ -690,6 +1096,27 @@ extern "C" void mke_main(void)
                 if (over || (interactive && in.focus_id == g_win.id()))
                     handle_click(in);
             }
+            if (released & UGX_BTN_LEFT) {
+                g_drag_slider = -1;
+                g_drag_scroll = 0;
+            }
+
+            /* Side buttons: Back → previous category, Forward → next */
+            if (pressed & UGX_BTN_BACK) {
+                if (g_active_category > 0) {
+                    g_active_category--;
+                    g_scroll_y = 0;
+                    g_dirty = true;
+                }
+            }
+            if (pressed & UGX_BTN_FORWARD) {
+                if (g_active_category + 1 < CAT_COUNT) {
+                    g_active_category++;
+                    g_scroll_y = 0;
+                    g_dirty = true;
+                }
+            }
+
             g_prev_input = in;
         }
 

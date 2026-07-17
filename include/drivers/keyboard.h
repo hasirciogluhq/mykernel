@@ -22,6 +22,8 @@
 #define KBD_MOD_ALT    0x04
 #define KBD_MOD_ALTGR  0x08
 #define KBD_MOD_CAPS   0x10
+#define KBD_MOD_SUPER  0x20  /* Win / Cmd (left or right) */
+#define KBD_MOD_MENU   0x40  /* Application / Menu key */
 
 void    keyboard_init(void);
 void    keyboard_handle_scancode(uint8_t sc);

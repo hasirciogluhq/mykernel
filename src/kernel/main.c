@@ -20,6 +20,7 @@
 #include <kernel/scheduler.h>
 #include <kernel/time.h>
 #include <kernel/mke.h>
+#include <kernel/boot_splash.h>
 #include <arch/x86/gdt.h>
 #include <arch/x86/idt.h>
 
@@ -130,6 +131,9 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     klog("[boot] mkdx ready\n");
     klog_heap("[boot]");
 
+    /* Calm spinner while userspace comes up — covers the raw LFB blue flash. */
+    boot_splash_show();
+
     service_register_builtin_defaults();
 
     klog("[boot] spawning .mke apps...\n");
@@ -141,17 +145,17 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     klog_heap("[boot]");
 
     {
-        process_t *table = process_table();
+        process_t **table = process_table();
         int i, n = 0;
         for (i = 0; i < PROC_MAX; i++) {
-            if (table[i].state != PROC_UNUSED) {
+            if (table[i] && table[i]->state != PROC_UNUSED) {
                 n++;
                 klog("[boot] proc name=");
-                klog(table[i].name);
+                klog(table[i]->name);
                 klog(" pid=");
-                serial_print_uint((uint32_t)table[i].pid);
+                serial_print_uint((uint32_t)table[i]->pid);
                 klog(" user=");
-                serial_print_uint((uint32_t)table[i].is_user);
+                serial_print_uint((uint32_t)table[i]->is_user);
                 klog("\n");
             }
         }

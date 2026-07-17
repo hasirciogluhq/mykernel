@@ -18,9 +18,10 @@ struct Rect {
 struct Input {
     int32_t mouse_x = 0;
     int32_t mouse_y = 0;
-    uint8_t buttons = 0;
-    uint8_t mods    = 0;
+    uint8_t buttons = 0;   /* UGX_BTN_* */
+    uint8_t mods    = 0;   /* KBD_MOD_* */
     int32_t focus_id = -1;
+    int32_t wheel   = 0;   /* notches since last input(); +up / -down (PS/2) */
 };
 
 struct WindowOptions {
@@ -170,6 +171,8 @@ bool input(Input &out);
 bool window_set(int id, const WindowOptions &opts);
 bool window_get(int id, WindowOptions &out);
 bool window_close(int id);
+/* Find top matching window by class_name (−1 if none). Prefer focused/visible. */
+int  window_find_class(const char *class_name);
 void damage();
 
 } // namespace hsrc::sdk

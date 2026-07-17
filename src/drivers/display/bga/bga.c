@@ -116,17 +116,17 @@ static int bga_set_mode(uint32_t width, uint32_t height, uint32_t bpp)
     serial_print_hex(lfb);
     klog(g_flip_ok ? " flip=y\n" : " flip=n\n");
 
-    /* Avoid pure black after leaving VGA text — proves LFB is alive. */
+    /* Dark canvas until boot splash / compositor takes over. */
     if (g_mode.bytes_per_pixel == 4) {
         volatile uint32_t *px = bga_page_ptr(0);
         uint32_t n = width * height;
         uint32_t i;
         for (i = 0; i < n; i++)
-            px[i] = 0xFF305C8Cu; /* desktop-ish blue */
+            px[i] = 0xFF141518u;
         if (g_flip_ok) {
             px = bga_page_ptr(1);
             for (i = 0; i < n; i++)
-                px[i] = 0xFF305C8Cu;
+                px[i] = 0xFF141518u;
         }
     }
     return 0;

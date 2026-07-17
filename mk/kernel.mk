@@ -32,6 +32,7 @@ KERNEL_C := $(SRC)/kernel/main.c \
             $(SRC)/kernel/module.c \
             $(SRC)/kernel/mkdx_api.c \
             $(SRC)/kernel/mke.c \
+            $(SRC)/kernel/boot_splash.c \
             $(SRC)/kernel/initrd_store.c \
             $(SRC)/kernel/uaccess.c
 

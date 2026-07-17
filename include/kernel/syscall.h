@@ -67,6 +67,7 @@
 #define SYS_WM_SET           217
 #define SYS_WM_GET           218
 #define SYS_WM_CLOSE         219
+#define SYS_WM_FIND_CLASS    275  /* a1 = class_name ptr → window id or -1 */
 
 /* Networking control syscalls (Wave F2) */
 #define SYS_NETIF_GET        246
@@ -84,6 +85,7 @@
 #define SYS_PROC_STAT       258
 #define SYS_SYSINFO         259
 #define SYS_KILL            260
+#define SYS_PROC_MAP        276  /* → pointer to proc_page_t (identity) */
 #define SYS_SERVICE_LIST    261
 #define SYS_SERVICE_START   262
 #define SYS_SERVICE_STOP    263

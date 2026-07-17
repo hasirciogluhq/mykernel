@@ -24,6 +24,10 @@ static int g_pending_full;
 static gx_rect g_pending_rect;
 static int g_deferred_move;
 static int32_t g_deferred_mx, g_deferred_my;
+/* Button press deferred across compose; release is never deferred (I14 grab). */
+static int g_deferred_btn;
+static uint8_t g_deferred_btn_code;
+static int32_t g_deferred_btn_x, g_deferred_btn_y;
 
 /* Classic arrow — 0 empty, 1 outline, 2 fill */
 static const uint8_t cursor_mask[CURSOR_H][CURSOR_W] = {
@@ -88,18 +92,14 @@ static void clamp_cursor_rect(int32_t *x, int32_t *y, int32_t *w, int32_t *h,
         *h = 0;
 }
 
-static void blit_scene_rect_to_bb(gx_server *s, int32_t x, int32_t y, int32_t w, int32_t h)
+/* Recompose a screen rect into the backbuffer (cursor-free). */
+static void compose_rect_to_bb(gx_server *s, int32_t x, int32_t y, int32_t w, int32_t h)
 {
-    gx_surface *scene = s->scene;
     gx_surface *bb = s->device.backbuffer;
     clamp_cursor_rect(&x, &y, &w, &h, bb->width, bb->height);
     if (w <= 0 || h <= 0)
         return;
-    for (int32_t row = 0; row < h; row++) {
-        memcpy(&bb->pixels[(uint32_t)(y + row) * bb->stride + (uint32_t)x],
-               &scene->pixels[(uint32_t)(y + row) * scene->stride + (uint32_t)x],
-               (size_t)w * sizeof(gx_color));
-    }
+    gx_compositor_compose_rect(&s->comp, bb, gx_rect_make(x, y, w, h));
 }
 
 static void draw_cursor_on_bb(gx_server *s, int32_t x, int32_t y)
@@ -217,7 +217,7 @@ static void flush_cursor_at(gx_server *s, int32_t mx, int32_t my)
 {
     display_ops_t *ops;
 
-    if (!s || !s->scene)
+    if (!s || !s->device.backbuffer)
         return;
     if (mx == s->cursor_x && my == s->cursor_y)
         return;
@@ -226,12 +226,13 @@ static void flush_cursor_at(gx_server *s, int32_t mx, int32_t my)
     if (!ops)
         return;
 
+    /* Erase old cursor by recomposing under it, then paint at the new spot. */
     if (s->cursor_x >= 0 && s->cursor_y >= 0) {
-        blit_scene_rect_to_bb(s, s->cursor_x, s->cursor_y, CURSOR_W, CURSOR_H);
+        compose_rect_to_bb(s, s->cursor_x, s->cursor_y, CURSOR_W, CURSOR_H);
         present_rect(s, s->cursor_x, s->cursor_y, CURSOR_W, CURSOR_H);
     }
 
-    blit_scene_rect_to_bb(s, mx, my, CURSOR_W, CURSOR_H);
+    compose_rect_to_bb(s, mx, my, CURSOR_W, CURSOR_H);
     draw_cursor_on_bb(s, mx, my);
     present_rect(s, mx, my, CURSOR_W, CURSOR_H);
 
@@ -259,6 +260,27 @@ static void flush_deferred_move(gx_server *s)
     wm_on_mouse_move(&s->wm, g_deferred_mx, g_deferred_my);
 }
 
+static void flush_deferred_btn(gx_server *s)
+{
+    if (!g_deferred_btn)
+        return;
+    g_deferred_btn = 0;
+    wm_on_mouse_button(&s->wm, g_deferred_btn_code, 1,
+                       g_deferred_btn_x, g_deferred_btn_y);
+}
+
+static void end_drag_if_released(gx_server *s)
+{
+    const mouse_state_t *ms;
+
+    /* Grab ends on button-up anywhere — even if the UP event was coalesced away. */
+    if (!s || s->wm.drag_id < 0)
+        return;
+    ms = mouse_get();
+    if (ms && !(ms->buttons & MOUSE_BTN_LEFT))
+        s->wm.drag_id = -1;
+}
+
 void gx_server_poll_input(void)
 {
     gx_server *s = gx_server_get();
@@ -281,22 +303,32 @@ void gx_server_poll_input(void)
                 apply_wm_move(s, last_move.x, last_move.y);
                 have_move = 0;
             }
-            /* Focus/raise/drag paths mark their own damage rects. */
-            if (!g_frame_busy)
+            /* Focus/raise start damage — defer across compose; never drop the grab. */
+            if (g_frame_busy) {
+                g_deferred_btn = 1;
+                g_deferred_btn_code = ev.button;
+                g_deferred_btn_x = ev.x;
+                g_deferred_btn_y = ev.y;
+            } else {
                 wm_on_mouse_button(&s->wm, ev.button, 1, ev.x, ev.y);
+            }
         } else if (ev.type == MOUSE_EV_UP) {
             if (have_move) {
                 apply_wm_move(s, last_move.x, last_move.y);
                 have_move = 0;
             }
-            if (!g_frame_busy)
-                wm_on_mouse_button(&s->wm, ev.button, 0, ev.x, ev.y);
+            /* Press+release while busy: cancel deferred press; always clear drag. */
+            if (g_deferred_btn && g_deferred_btn_code == ev.button)
+                g_deferred_btn = 0;
+            wm_on_mouse_button(&s->wm, ev.button, 0, ev.x, ev.y);
         }
     }
     if (have_move) {
         /* wm_move damages old+new frames; do not escalate to full-screen dirty. */
         apply_wm_move(s, last_move.x, last_move.y);
     }
+
+    end_drag_if_released(s);
 
     while ((ch = keyboard_getchar()) >= 0)
         wm_push_key(&s->wm, (uint8_t)ch);
@@ -339,11 +371,9 @@ int gx_server_init(void)
     if (proc_console_init() < 0)
         return -1;
 
-    g_server.scene = gx_surface_create(g_server.device.mode.width,
-                                       g_server.device.mode.height);
-    if (!g_server.scene)
-        return -1;
-
+    /* Compose directly into the display backbuffer — a second full-screen
+     * scene surface (~3.6MiB @ 1280×720) starved WM window allocations on the
+     * bump heap (files / activity-monitor create failed; terminal barely fit). */
     g_server.cursor = make_cursor();
     if (!g_server.cursor)
         return -1;
@@ -398,7 +428,6 @@ int gx_server_frame_tick(void)
     const mouse_state_t *ms;
     int32_t mx, my;
     gx_surface *bb;
-    gx_surface *scene;
     gx_rect damage;
     int full;
 
@@ -419,6 +448,7 @@ int gx_server_frame_tick(void)
         mx = ms ? ms->x : 0;
         my = ms ? ms->y : 0;
         flush_cursor_at(s, mx, my);
+        flush_deferred_btn(s);
         flush_deferred_move(s);
         merge_pending_into_dirty(s);
         return 0;
@@ -429,15 +459,16 @@ int gx_server_frame_tick(void)
     my = ms ? ms->y : 0;
 
     bb = s->device.backbuffer;
-    scene = s->scene;
+    if (!bb)
+        return -1;
 
     full = s->dirty_full || gx_rect_empty(s->dirty_rect);
     if (full) {
-        damage = gx_rect_make(0, 0, (int32_t)scene->width, (int32_t)scene->height);
+        damage = gx_rect_make(0, 0, (int32_t)bb->width, (int32_t)bb->height);
     } else {
         damage = gx_rect_intersect(
             s->dirty_rect,
-            gx_rect_make(0, 0, (int32_t)scene->width, (int32_t)scene->height));
+            gx_rect_make(0, 0, (int32_t)bb->width, (int32_t)bb->height));
         if (gx_rect_empty(damage)) {
             s->dirty = 0;
             s->dirty_full = 0;
@@ -457,7 +488,8 @@ int gx_server_frame_tick(void)
         static int s_present_log;
         int li, nvis = 0;
 
-        gx_compositor_compose_rect(&s->comp, scene, damage);
+        /* Compose straight into the scanout buffer (no spare scene surface). */
+        gx_compositor_compose_rect(&s->comp, bb, damage);
 
         /* Drain PS/2; WM moves stay deferred until frame completes. */
         gx_server_poll_input();
@@ -497,10 +529,10 @@ int gx_server_frame_tick(void)
             s_present_log++;
         }
 
-        /* Scene → backbuffer for the damaged region, then overlay cursor. */
-        blit_scene_rect_to_bb(s, damage.x, damage.y, damage.w, damage.h);
-        if (s->cursor_x >= 0 && s->cursor_y >= 0)
-            blit_scene_rect_to_bb(s, s->cursor_x, s->cursor_y, CURSOR_W, CURSOR_H);
+        /* Damage already in bb; restore under old cursor then overlay. */
+        if (s->cursor_x >= 0 && s->cursor_y >= 0 &&
+            (s->cursor_x != mx || s->cursor_y != my))
+            compose_rect_to_bb(s, s->cursor_x, s->cursor_y, CURSOR_W, CURSOR_H);
         draw_cursor_on_bb(s, mx, my);
 
         if (full) {
@@ -521,8 +553,10 @@ int gx_server_frame_tick(void)
 
     g_frame_busy = 0;
 
-    /* Apply deferred drag + any damage marked during the frame. */
+    /* Apply deferred press/drag + any damage marked during the frame. */
+    flush_deferred_btn(s);
     flush_deferred_move(s);
+    end_drag_if_released(s);
     merge_pending_into_dirty(s);
 
     gx_server_poll_input();

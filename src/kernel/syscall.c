@@ -27,13 +27,14 @@ typedef struct {
     uint32_t eip, cs, eflags;
 } regs_t;
 
-/* Log only setup-ish GX/WM calls (not per-frame YIELD/DAMAGE/INPUT). */
+/* Log only setup-ish GX/WM calls (not per-frame YIELD/DAMAGE/INPUT/GET probes). */
 static int sys_log_interesting(long n)
 {
     return n == SYS_GX_INFO || n == SYS_GX_PRESENT || n == SYS_WM_CREATE ||
-           n == SYS_WM_SET || n == SYS_WM_GET || n == SYS_WM_CLOSE ||
+           n == SYS_WM_SET || n == SYS_WM_CLOSE ||
            n == SYS_WM_MAP || n == SYS_GX_SET_WALLPAPER || n == SYS_WM_DESTROY ||
            n == SYS_WM_SHOW || n == SYS_WM_FOCUS || n == SYS_WM_FIND ||
+           n == SYS_WM_FIND_CLASS ||
            n == SYS_SPAWN || n == SYS_KILL || n == SYS_SERVICE_START ||
            n == SYS_SERVICE_STOP || n == SYS_CONSOLE_SHOW;
 }
@@ -400,6 +401,9 @@ static long do_yield(void)
     if (api && api->pump_input)
         api->pump_input();
 
+    /* Keep shared proc snapshot fresh without forcing apps to SYS_PROC_LIST. */
+    process_snapshot_publish();
+
     schedule();
     return 0;
 }
@@ -547,29 +551,61 @@ static long do_setenv(long name_ptr, long val_ptr, long global_flag)
 
 static long do_proc_list(long outp, long max_entries)
 {
-    proc_list_entry_t entries[PROC_MAX];
+    /* Prefer shared snapshot — one publish, no per-call table storm. */
+    proc_page_t *page;
+    proc_list_entry_t chunk[16];
     int total;
     int copied;
+    int want;
 
     if (max_entries < 0)
         return -EINVAL;
 
+    process_snapshot_publish();
+    page = process_page_get();
+    if (page && page->magic == PROC_PAGE_MAGIC && (page->seq & 1u) == 0) {
+        total = (int)page->process_count;
+        if (!outp || max_entries == 0)
+            return total;
+        copied = (int)page->count;
+        if (copied > max_entries)
+            copied = (int)max_entries;
+        if (copied > 0 &&
+            copy_to_user((void *)outp, page->entries,
+                         (size_t)copied * sizeof(page->entries[0])) < 0)
+            return -EFAULT;
+        return copied;
+    }
+
+    /* Fallback: walk in tiny stack chunks (never PROC_MAX / PROC_PAGE_MAX). */
     total = process_list(NULL, 0);
     if (!outp || max_entries == 0)
         return total;
 
-    copied = total;
-    if (copied > PROC_MAX)
-        copied = PROC_MAX;
-    if ((long)copied > max_entries)
-        copied = (int)max_entries;
+    want = total;
+    if (want > PROC_PAGE_MAX)
+        want = PROC_PAGE_MAX;
+    if ((long)want > max_entries)
+        want = (int)max_entries;
 
-    if (copied > 0) {
-        (void)process_list(entries, (size_t)copied);
-        if (copy_to_user((void *)outp, entries, (size_t)copied * sizeof(entries[0])) < 0)
+    copied = 0;
+    while (copied < want) {
+        int batch = want - copied;
+        int remain;
+
+        if (batch > 16)
+            batch = 16;
+        (void)process_list_range(chunk, (size_t)batch, (size_t)copied);
+        remain = total - copied;
+        if (remain < batch)
+            batch = remain;
+        if (batch <= 0)
+            break;
+        if (copy_to_user((void *)((uintptr_t)outp + (size_t)copied * sizeof(chunk[0])),
+                         chunk, (size_t)batch * sizeof(chunk[0])) < 0)
             return -EFAULT;
+        copied += batch;
     }
-
     return copied;
 }
 
@@ -591,10 +627,27 @@ static long do_proc_stat(long pid, long outp)
 static long do_sysinfo(long outp)
 {
     sys_info_t info;
+    proc_page_t *page;
     int rc;
 
     if (!outp)
         return -EFAULT;
+
+    process_snapshot_publish();
+    page = process_page_get();
+    if (page && page->magic == PROC_PAGE_MAGIC && (page->seq & 1u) == 0) {
+        memset(&info, 0, sizeof(info));
+        info.uptime_ticks = page->uptime_ticks;
+        info.total_cpu_ticks = page->total_cpu_ticks;
+        info.total_ram_bytes = page->total_ram_bytes;
+        info.used_ram_bytes = page->used_ram_bytes;
+        info.free_ram_bytes = page->free_ram_bytes;
+        info.process_count = page->process_count;
+        if (copy_to_user((void *)outp, &info, sizeof(info)) < 0)
+            return -EFAULT;
+        return 0;
+    }
+
     rc = process_sysinfo(&info);
     if (rc < 0)
         return rc;
@@ -1020,6 +1073,22 @@ static long do_wm_find(long titlep)
     if (copy_from_user(title, (const void *)titlep, (size_t)len + 1) < 0)
         return -1;
     return api->wm_find(title);
+}
+
+static long do_wm_find_class(long classp)
+{
+    char class_name[32];
+    int len;
+    const mkdx_api_t *api = mkdx();
+
+    if (!api || !api->wm_find_class)
+        return -1;
+    len = user_strlen((const char *)classp, sizeof(class_name));
+    if (len < 0)
+        return -1;
+    if (copy_from_user(class_name, (const void *)classp, (size_t)len + 1) < 0)
+        return -1;
+    return api->wm_find_class(class_name);
 }
 
 static int copy_netif_name(long namep, char name[NETIF_NAME_MAX])
@@ -1518,6 +1587,13 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
             return 0;
         return (long)(uintptr_t)tp;
     }
+    case SYS_PROC_MAP: {
+        proc_page_t *pp = process_page_get();
+        if (!pp || pp->magic != PROC_PAGE_MAGIC)
+            return 0;
+        process_snapshot_publish();
+        return (long)(uintptr_t)pp;
+    }
     case SYS_TIME_GET: {
         time_snapshot_t snap;
         memset(&snap, 0, sizeof(snap));
@@ -1580,6 +1656,7 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
     case SYS_GX_DAMAGE:        return do_gx_damage(a1);
     case SYS_WM_GET_FRAME:     return do_wm_get_frame(a1, a2);
     case SYS_WM_FIND:          return do_wm_find(a1);
+    case SYS_WM_FIND_CLASS:    return do_wm_find_class(a1);
 
     default:         return -1;
     }

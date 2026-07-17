@@ -1,5 +1,6 @@
 #include "accel.h"
 #include "blur.h"
+#include <kernel/heap.h>
 #include <kernel/string.h>
 #include <drivers/ps2.h>
 #include "compositor.h"
@@ -129,7 +130,19 @@ void gx_compositor_set_wallpaper(gx_compositor *c, gx_surface *wp)
     if (wp->width <= 1 || wp->height <= 1)
         return;
 
-    /* Pre-blur once so thin shell chrome can sample a stable frosted backdrop. */
+    /*
+     * Pre-blur needs the output surface plus two full-size scratch buffers.
+     * On the bump heap that peak often succeeds for the output then fails the
+     * scratch alloc — or worse, succeeds and leaves no RAM for app windows.
+     * Skip when free heap cannot hold output + 2× scratch + ~2MiB headroom.
+     */
+    {
+        size_t bytes = (size_t)wp->width * (size_t)wp->height * sizeof(gx_color);
+        size_t need = bytes * 3u + (2u * 1024u * 1024u);
+        if (heap_free() < need)
+            return;
+    }
+
     c->wallpaper_blurred = gx_surface_create(wp->width, wp->height);
     if (!c->wallpaper_blurred)
         return;

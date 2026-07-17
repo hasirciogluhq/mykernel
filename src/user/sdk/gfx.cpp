@@ -450,6 +450,21 @@ void Surface::text_centered(int cx, int cy, const char *s, Color c, int scale)
     text(cx - tw / 2, cy - th / 2, s, c, scale);
 }
 
+/* Fast opaque disc for traffic lights — no 4×4 AA (chrome redraw hot path). */
+void chrome_btn_disc(Surface &s, int x, int y, int size, Color c)
+{
+    const int r = size / 2;
+    const int rr = r * r;
+    for (int ly = 0; ly < size; ly++) {
+        const int dy = ly - r;
+        for (int lx = 0; lx < size; lx++) {
+            const int dx = lx - r;
+            if (dx * dx + dy * dy <= rr)
+                s.set(x + lx, y + ly, c);
+        }
+    }
+}
+
 void Surface::draw_window_chrome(int win_w, const char *title, const WindowOptions &opts,
                                  Color bar_bg, Color title_color, Color border)
 {
@@ -457,11 +472,11 @@ void Surface::draw_window_chrome(int win_w, const char *title, const WindowOptio
     fill(0, kChromeTitleH - 1, win_w, 1, border);
 
     if (opts.closable)
-        fill_round(chrome_btn_x(0), kChromeBtnY, kChromeBtn, kChromeBtn, 6, rgb(255, 95, 87));
+        chrome_btn_disc(*this, chrome_btn_x(0), kChromeBtnY, kChromeBtn, rgb(255, 95, 87));
     if (opts.can_minimize)
-        fill_round(chrome_btn_x(1), kChromeBtnY, kChromeBtn, kChromeBtn, 6, rgb(255, 189, 46));
+        chrome_btn_disc(*this, chrome_btn_x(1), kChromeBtnY, kChromeBtn, rgb(255, 189, 46));
     if (opts.can_maximize)
-        fill_round(chrome_btn_x(2), kChromeBtnY, kChromeBtn, kChromeBtn, 6, rgb(40, 200, 64));
+        chrome_btn_disc(*this, chrome_btn_x(2), kChromeBtnY, kChromeBtn, rgb(40, 200, 64));
 
     if (title && title[0]) {
         int tx = chrome_btn_x(3) + 4;
@@ -506,9 +521,14 @@ bool Window::set_options(const WindowOptions &opts)
 {
     if (id_ < 0)
         return false;
+    const uint32_t old_w = surf_.valid() ? surf_.width() : 0;
+    const uint32_t old_h = surf_.valid() ? surf_.height() : 0;
     ugx_window_opts raw = to_ugx(opts);
     if (syscall2(SYS_WM_SET, id_, (long)&raw) < 0)
         return false;
+    /* Minimize/show/focus flags keep the same buffer — skip WM_MAP. */
+    if (surf_.valid() && (uint32_t)opts.w == old_w && (uint32_t)opts.h == old_h)
+        return true;
     return remap_surface();
 }
 
@@ -745,6 +765,7 @@ bool input(Input &out)
     out.buttons = st.buttons;
     out.mods = st.mods;
     out.focus_id = st.focus_id;
+    out.wheel = st.wheel;
     return true;
 }
 
@@ -766,6 +787,14 @@ bool window_get(int id, WindowOptions &out)
 bool window_close(int id)
 {
     return syscall1(SYS_WM_CLOSE, id) == 0;
+}
+
+int window_find_class(const char *class_name)
+{
+    if (!class_name || !class_name[0])
+        return -1;
+    long id = syscall1(SYS_WM_FIND_CLASS, (long)class_name);
+    return (id >= 0) ? (int)id : -1;
 }
 
 void damage()

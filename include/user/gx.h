@@ -4,9 +4,11 @@
 #include <kernel/types.h>
 #include <kernel/syscall.h>
 
-#define UGX_BTN_LEFT   0x01
-#define UGX_BTN_RIGHT  0x02
-#define UGX_BTN_MIDDLE 0x04
+#define UGX_BTN_LEFT    0x01
+#define UGX_BTN_RIGHT   0x02
+#define UGX_BTN_MIDDLE  0x04
+#define UGX_BTN_BACK    0x08  /* mouse side / X1 */
+#define UGX_BTN_FORWARD 0x10  /* mouse side / X2 */
 
 typedef struct ugx_info {
     uint32_t width;
@@ -80,9 +82,10 @@ typedef struct ugx_wallpaper {
 typedef struct ugx_input_state {
     int32_t mouse_x;
     int32_t mouse_y;
-    uint8_t buttons;
+    uint8_t buttons;   /* UGX_BTN_* incl. side buttons when present */
     uint8_t mods;      /* KBD_MOD_* from keyboard.h */
     int32_t focus_id;  /* -1 = none */
+    int32_t wheel;     /* accumulated notches since previous input read */
 } ugx_input_state;
 
 /* ARGB helpers for userspace */

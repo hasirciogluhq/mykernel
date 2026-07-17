@@ -134,8 +134,10 @@ bool load_entries()
         return false;
     }
 
-    vfs_dirent_t raw[64];
-    long count = hsrc::sdk::getdents(fd, raw, 64);
+    /* User stacks are 8KiB; kernel getdents also caps at 32. Avoid 64×dirent (~4.5KiB). */
+    constexpr int kDentBatch = 32;
+    vfs_dirent_t raw[kDentBatch];
+    long count = hsrc::sdk::getdents(fd, raw, kDentBatch);
     (void)hsrc::sdk::close(fd);
     if (count < 0) {
         set_status("listing failed");
@@ -414,17 +416,15 @@ extern "C" void mke_main(void)
     opts.set_title("Files");
     opts.set_class_name("os.files");
 
-    if (!g_win.create(opts)) {
-        for (;;)
-            hsrc::sdk::yield();
-    }
+    if (!g_win.create(opts))
+        hsrc::sdk::exit(1);
     (void)refresh_window_options();
 
-    if (!navigate_to("/applications"))
-        (void)navigate_to("/");
-
+    /* Show first so a slow/failed listing still leaves a visible window. */
     g_win.show(true);
     g_win.focus();
+    if (!navigate_to("/applications"))
+        (void)navigate_to("/");
     paint();
     (void)hsrc::sdk::present();
 

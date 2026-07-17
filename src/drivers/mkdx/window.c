@@ -113,7 +113,8 @@ static void apply_layer_style(wm_window *w, gx_layer *layer)
         if (class_name_is(&w->opts, "shell.menubar")) {
             layer->tint = GX_RGBA(248, 249, 252, 178);
         } else if (class_name_is(&w->opts, "shell.dock")) {
-            layer->tint = GX_RGBA(26, 30, 38, 176);
+            /* Light frosted glass — never a dark slab over mag headroom. */
+            layer->tint = GX_RGBA(255, 255, 255, 96);
         } else {
             layer->tint = GX_RGBA(255, 255, 255, 120);
         }
@@ -374,16 +375,32 @@ int wm_find_by_title(wm_t *wm, const char *title)
 int wm_find_by_class(wm_t *wm, const char *class_name)
 {
     int i;
+    int best_id = -1;
+    int best_score = -1;
+
     if (!wm || !class_name || !class_name[0])
         return -1;
     for (i = 0; i < WM_MAX_WINDOWS; i++) {
         wm_window *w = &wm->windows[i];
+        int score;
+
         if (!w->used)
             continue;
-        if (strcmp(w->opts.class_name, class_name) == 0)
-            return w->id;
+        if (strcmp(w->opts.class_name, class_name) != 0)
+            continue;
+
+        /* Prefer focused, then visible non-minimized (dock scan / deeplink). */
+        score = 1;
+        if (w->opts.visible && !w->opts.minimized)
+            score += 2;
+        if (w->id == wm->focus_id)
+            score += 4;
+        if (score > best_score) {
+            best_score = score;
+            best_id = w->id;
+        }
     }
-    return -1;
+    return best_id;
 }
 
 int wm_map(wm_t *wm, int id, wm_map_info *out)
@@ -544,6 +561,7 @@ void wm_on_mouse_button(wm_t *wm, uint8_t button, int pressed,
         return;
 
     if (!pressed) {
+        /* Release ends drag regardless of cursor position (grab started in title). */
         wm->drag_id = -1;
         return;
     }
@@ -561,6 +579,7 @@ void wm_on_mouse_button(wm_t *wm, uint8_t button, int pressed,
 
     wm_focus(wm, id);
 
+    /* Drag pick: press must begin inside titlebar (not traffic-light zone). */
     int can_drag = !(w->opts.no_drag || w->opts.no_title);
     int local_x = x - w->frame.x;
     int local_y = y - w->frame.y;
