@@ -36,11 +36,15 @@ using hsrc::sdk::settings::refresh_status;
 using hsrc::sdk::settings::status;
 
 constexpr int kMenubarH = 28;
-constexpr int kDockH = 78;
+constexpr int kDockTrayH = 72;   /* acrylic tray body */
+constexpr int kDockMagPad = 20;  /* headroom above tray for magnification */
+constexpr int kDockH = kDockMagPad + kDockTrayH;
 constexpr int kDockPad = 18;
 constexpr int kDockGap = 14;
 constexpr int kDockRad = 20;
-constexpr int kIconRad = 12;
+constexpr int kHoverMag = 14;    /* max hovered icon boost (px) */
+constexpr int kMagFP = 16;       /* fixed-point for mag lerp (px * kMagFP) */
+constexpr int kMagLerpDiv = 4;   /* ~macOS snappy ease toward target */
 constexpr int kSepW = 10;
 constexpr int kMaxSlots = 10;
 constexpr int kScanEvery = 12;
@@ -99,6 +103,8 @@ struct DockSlot {
     int  window_id = -1;
     int  bounce = 0;
     int  appear = 0; /* 0..12 intro scale-in */
+    int  mag = 0;        /* animated boost, fixed-point (px * kMagFP) */
+    int  mag_target = 0; /* hover target, same units */
 };
 
 Window g_desktop;
@@ -376,16 +382,71 @@ int bounce_offset(int bounce)
     return 0;
 }
 
-int hover_boost(int slot, int hover)
+/* Target boost in px — only meaningful while cursor is over the dock tray. */
+int hover_boost_px(int slot, int hover)
 {
     if (hover < 0)
         return 0;
     int d = abs_i(slot - hover);
     if (d == 0)
-        return 10;
+        return kHoverMag;
     if (d == 1)
-        return 4;
+        return (kHoverMag * 5) / 10;
+    if (d == 2)
+        return (kHoverMag * 2) / 10;
     return 0;
+}
+
+int mag_to_px(int mag_fp)
+{
+    if (mag_fp <= 0)
+        return 0;
+    return (mag_fp + kMagFP / 2) / kMagFP;
+}
+
+void update_mag_targets()
+{
+    for (int i = 0; i < g_slot_count; i++)
+        g_slots[i].mag_target = hover_boost_px(i, g_hover) * kMagFP;
+}
+
+bool tick_magnification()
+{
+    bool moved = false;
+    for (int i = 0; i < g_slot_count; i++) {
+        DockSlot &s = g_slots[i];
+        int diff = s.mag_target - s.mag;
+        if (diff == 0)
+            continue;
+        int step = diff / kMagLerpDiv;
+        if (step == 0)
+            step = (diff > 0) ? 1 : -1;
+        s.mag += step;
+        if ((diff > 0 && s.mag > s.mag_target) ||
+            (diff < 0 && s.mag < s.mag_target))
+            s.mag = s.mag_target;
+        moved = true;
+    }
+    return moved;
+}
+
+int icon_radius(int sz)
+{
+    int r = sz / 4;
+    if (r < 10)
+        r = 10;
+    if (r > 18)
+        r = 18;
+    return r;
+}
+
+void draw_dock_icon(Surface &s, int ix, int iy, int sz, Color fill)
+{
+    const int rad = icon_radius(sz);
+    /* Light soft shadow — not a black slab. */
+    s.fill_round(ix + 1, iy + 2, sz, sz, rad, rgba(0, 0, 0, 22));
+    s.fill_round(ix, iy + 1, sz, sz, rad, rgba(0, 0, 0, 12));
+    s.fill_round(ix, iy, sz, sz, rad, fill);
 }
 
 int compute_tray_width(int slots, bool has_sep)
@@ -421,6 +482,8 @@ void push_slot(const DockSlot *prev, int prev_n, int app, bool pinned)
     s.window_id = g_win_id[app];
     s.bounce = old ? old->bounce : 0;
     s.appear = old ? old->appear : 12;
+    s.mag = old ? old->mag : 0;
+    s.mag_target = old ? old->mag_target : 0;
 }
 
 void rebuild_slots()
@@ -462,6 +525,8 @@ void tick_animations()
         if (g_slots[i].appear > 0)
             g_slots[i].appear--;
     }
+    update_mag_targets();
+    (void)tick_magnification();
     if (g_tray_w < g_tray_target) {
         int step = (g_tray_target - g_tray_w + 3) / 4;
         if (step < 2)
@@ -485,6 +550,8 @@ bool animating()
         return true;
     for (int i = 0; i < g_slot_count; i++) {
         if (g_slots[i].bounce > 0 || g_slots[i].appear > 0)
+            return true;
+        if (g_slots[i].mag != g_slots[i].mag_target)
             return true;
     }
     return false;
@@ -618,15 +685,20 @@ void paint_dock()
     s.clear(kTransparent);
 
     const int tray0 = (g_dock_w - g_tray_w) / 2;
-    s.fill_round(tray0, 0, g_tray_w, kDockH, kDockRad, rgba(255, 255, 255, 18));
-    s.fill_round(tray0 + 1, 1, g_tray_w - 2, kDockH - 2, kDockRad - 1, rgba(255, 255, 255, 12));
-    s.fill(tray0 + 12, 1, g_tray_w - 24, 1, rgba(255, 255, 255, 78));
-    s.fill(tray0 + 16, kDockH - 2, g_tray_w - 32, 1, rgba(0, 0, 0, 48));
+    const int tray_y = kDockMagPad;
+
+    /* Light glass tray only — mag headroom above stays fully clear. */
+    s.fill_round(tray0, tray_y, g_tray_w, kDockTrayH, kDockRad, rgba(255, 255, 255, 48));
+    s.fill_round(tray0 + 1, tray_y + 1, g_tray_w - 2, kDockTrayH - 2, kDockRad - 1,
+                 rgba(255, 255, 255, 22));
+    s.fill(tray0 + 14, tray_y + 1, g_tray_w - 28, 1, rgba(255, 255, 255, 90));
 
     if (g_sep_after >= 0 && g_sep_after + 1 < g_slot_count) {
         int sx = slot_local_x(g_sep_after) + g_icon + kDockGap / 2 + 2;
-        s.fill(sx, 16, 2, kDockH - 32, rgba(255, 255, 255, 70));
+        s.fill(sx, tray_y + 14, 2, kDockTrayH - 28, rgba(255, 255, 255, 70));
     }
+
+    const int base_y = tray_y + (kDockTrayH - g_icon) / 2;
 
     for (int i = 0; i < g_slot_count; i++) {
         const DockSlot &slot = g_slots[i];
@@ -634,22 +706,23 @@ void paint_dock()
             continue;
         const AppDef &app = kApps[slot.app];
         const int base_x = slot_local_x(i);
-        const int boost = hover_boost(i, g_hover);
+        const int boost = mag_to_px(slot.mag);
         const int appear_shrink = slot.appear > 0 ? slot.appear : 0;
-        const int sz = g_icon + boost - appear_shrink;
-        const int lift = bounce_offset(slot.bounce) + (boost > 0 ? boost / 2 : 0);
+        int sz = g_icon + boost - appear_shrink;
+        if (sz < 24)
+            sz = 24;
+        const int lift = bounce_offset(slot.bounce) + boost / 2;
         const int ix = base_x - (sz - g_icon) / 2;
-        const int iy = (kDockH - g_icon) / 2 - lift - (sz - g_icon) / 2;
+        const int iy = base_y - lift - (sz - g_icon) / 2;
 
-        s.fill_round(ix, iy, sz, sz, kIconRad + boost / 4, app.color);
-        s.fill_round(ix + 6, iy + 4, sz - 12, 10, 5, rgba(255, 255, 255, 55));
+        draw_dock_icon(s, ix, iy, sz, app.color);
 
         const int tw = text_width(app.label);
         s.text(ix + (sz - tw) / 2, iy + sz / 2 - 3, app.label, kDockFg, 1);
 
         if (slot.running) {
             const int dx = base_x + g_icon / 2 - 2;
-            const int dy = kDockH - 10;
+            const int dy = tray_y + kDockTrayH - 10;
             Color dot = slot.minimized ? kDotHidden : kDotLive;
             if (slot.focused)
                 dot = rgb(255, 255, 255);
@@ -660,23 +733,37 @@ void paint_dock()
     g_dock.damage();
 }
 
+/*
+ * Cursor must be over the painted tray (padding + icon row + gaps).
+ * Mag headroom above the tray is NOT a hover zone — only visual overflow.
+ * Nearest icon center picks which slot magnifies.
+ */
 int dock_hit(int x, int y)
 {
-    if (x < g_dock_x || y < g_dock_y || x >= g_dock_x + g_dock_w ||
-        y >= g_dock_y + kDockH)
+    if (g_slot_count <= 0)
         return -1;
 
     const int lx = x - g_dock_x;
+    const int ly = y - g_dock_y;
     const int tray0 = (g_dock_w - g_tray_w) / 2;
+    const int tray_y = kDockMagPad;
+
+    if (ly < tray_y || ly >= tray_y + kDockTrayH)
+        return -1;
     if (lx < tray0 || lx >= tray0 + g_tray_w)
         return -1;
 
-    for (int i = 0; i < g_slot_count; i++) {
-        const int ix = slot_local_x(i);
-        if (lx >= ix && lx < ix + g_icon)
-            return i;
+    int best = 0;
+    int best_d = abs_i(lx - (slot_local_x(0) + g_icon / 2));
+    for (int i = 1; i < g_slot_count; i++) {
+        const int cx = slot_local_x(i) + g_icon / 2;
+        const int d = abs_i(lx - cx);
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
     }
-    return -1;
+    return best;
 }
 
 int menubar_hit(int x, int y)
@@ -866,12 +953,13 @@ bool build_ui()
     dock_opts.y = g_dock_y;
     dock_opts.w = g_dock_w;
     dock_opts.h = kDockH;
-    dock_opts.radius = kDockRad;
-    dock_opts.rounded = true;
+    dock_opts.radius = 0;
+    dock_opts.rounded = false; /* tray rounds are painted; window round = black slab */
     dock_opts.no_drag = true;
     dock_opts.no_title = true;
     dock_opts.background = true;
-    dock_opts.acrylic = true;
+    /* No acrylic: compositor tint filled the whole window incl. mag pad (black slab). */
+    dock_opts.acrylic = false;
     dock_opts.alpha = true;
     dock_opts.accept_focus = false;
     dock_opts.topmost = true;
