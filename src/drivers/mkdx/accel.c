@@ -1,4 +1,5 @@
 #include "accel.h"
+#include <kernel/string.h>
 
 /*
  * Pixel-perfect rounded rect. Mirror into TL quadrant so all four corners
@@ -138,20 +139,45 @@ void gx_accel_blit_rect(gx_surface *dst, int32_t dx, int32_t dy,
             continue;
 
         int32_t x0 = src_r.x < 0 ? -src_r.x : 0;
-        for (int32_t x = x0; x < src_r.w; x++) {
+        int32_t x = x0;
+        while (x < src_r.w) {
             int32_t sx = src_r.x + x;
             int32_t dx2 = dx + x;
-            if (sx < 0 || (uint32_t)sx >= src->width || dx2 < 0 || (uint32_t)dx2 >= dst->width)
+            if (sx < 0 || (uint32_t)sx >= src->width || dx2 < 0 ||
+                (uint32_t)dx2 >= dst->width) {
+                x++;
                 continue;
+            }
+
             gx_color c = src->pixels[(uint32_t)sy * src->stride + (uint32_t)sx];
-            if (GX_A(c) == 0)
+            if (GX_A(c) == 0) {
+                x++;
                 continue;
-            if (GX_A(c) == 255)
-                dst->pixels[(uint32_t)dy2 * dst->stride + (uint32_t)dx2] = c;
-            else {
+            }
+            if (GX_A(c) != 255) {
                 gx_color *dp = &dst->pixels[(uint32_t)dy2 * dst->stride + (uint32_t)dx2];
                 *dp = gx_blend(*dp, c);
+                x++;
+                continue;
             }
+
+            /* Opaque run → memcpy (P09/P20). */
+            int32_t run = 1;
+            while (x + run < src_r.w) {
+                int32_t sx2 = src_r.x + x + run;
+                int32_t dx3 = dx + x + run;
+                if (sx2 < 0 || (uint32_t)sx2 >= src->width || dx3 < 0 ||
+                    (uint32_t)dx3 >= dst->width)
+                    break;
+                gx_color c2 = src->pixels[(uint32_t)sy * src->stride + (uint32_t)sx2];
+                if (GX_A(c2) != 255)
+                    break;
+                run++;
+            }
+            memcpy(&dst->pixels[(uint32_t)dy2 * dst->stride + (uint32_t)dx2],
+                   &src->pixels[(uint32_t)sy * src->stride + (uint32_t)sx],
+                   (size_t)run * sizeof(gx_color));
+            x += run;
         }
     }
 }

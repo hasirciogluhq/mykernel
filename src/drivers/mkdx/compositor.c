@@ -200,58 +200,25 @@ static void blit_span(gx_surface *bb, int32_t dx, int32_t dy,
     }
 }
 
-/* Rounded-corner row: coverage-modulated blend for soft silhouette edges. */
-static void blit_round_row(gx_surface *bb, int32_t dx, int32_t dy,
-                           const gx_surface *src, int32_t sy, int32_t local_y,
-                           int32_t w, int32_t h, int32_t rad, uint8_t opacity)
-{
-    if (dy < 0 || (uint32_t)dy >= bb->height || sy < 0 || (uint32_t)sy >= src->height)
-        return;
-
-    int32_t x0, x1;
-    round_span(local_y, w, h, rad, &x0, &x1);
-    /* Expand one pixel for AA fringe outside the hard span. */
-    if (x0 > 0)
-        x0--;
-    if (x1 < w)
-        x1++;
-
-    for (int32_t sx = x0; sx < x1; sx++) {
-        if (sx < 0 || sx >= (int32_t)src->width)
-            continue;
-        uint8_t cov = gx_round_coverage(sx, local_y, w, h, rad);
-        if (cov == 0)
-            continue;
-        int32_t x = dx + sx;
-        if (x < 0 || (uint32_t)x >= bb->width)
-            continue;
-        gx_color c = src->pixels[(uint32_t)sy * src->stride + (uint32_t)sx];
-        if (opacity != 255)
-            c = gx_color_mul_alpha(c, opacity);
-        if (cov < 255)
-            c = gx_color_mul_alpha(c, cov);
-        if (GX_A(c) == 0)
-            continue;
-        gx_color *dp = &bb->pixels[(uint32_t)dy * bb->stride + (uint32_t)x];
-        if (GX_A(c) == 255)
-            *dp = c;
-        else
-            *dp = gx_blend(*dp, c);
-    }
-}
-
-/* Fast path: opaque solid rows via memcpy when fully opaque source. */
-static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity)
+/* Fast path: opaque solid rows via memcpy when fully opaque source.
+ * clip is in screen space; empty clip means full layer bounds. */
+static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity, gx_rect clip)
 {
     gx_surface *src = L->surface;
     if (!src)
         return;
 
     gx_rect r = L->bounds;
+    gx_rect vis = gx_rect_empty(clip) ? r : gx_rect_intersect(r, clip);
+    if (gx_rect_empty(vis))
+        return;
+
     int32_t rad = L->corner_radius;
     int fast_opaque = (L->style == GX_LAYER_OPAQUE && opacity == 255 && rad <= 0);
+    int32_t y0 = vis.y - r.y;
+    int32_t y1 = y0 + vis.h;
 
-    for (int32_t y = 0; y < r.h; y++) {
+    for (int32_t y = y0; y < y1; y++) {
         int32_t sy = r.y + y;
         if (sy < 0 || (uint32_t)sy >= bb->height || (uint32_t)y >= src->height)
             continue;
@@ -260,12 +227,50 @@ static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity)
             ps2_poll();
 
         if (rad > 0) {
-            blit_round_row(bb, r.x, sy, src, y, y, r.w, r.h, rad, opacity);
+            /* Restrict round-row scan to the clipped horizontal span. */
+            int32_t lx0 = vis.x - r.x;
+            int32_t lx1 = lx0 + vis.w;
+            int32_t rx0, rx1;
+            round_span(y, r.w, r.h, rad, &rx0, &rx1);
+            if (rx0 > 0)
+                rx0--;
+            if (rx1 < r.w)
+                rx1++;
+            if (lx0 > rx0)
+                rx0 = lx0;
+            if (lx1 < rx1)
+                rx1 = lx1;
+            for (int32_t sx = rx0; sx < rx1; sx++) {
+                if (sx < 0 || sx >= (int32_t)src->width)
+                    continue;
+                uint8_t cov = gx_round_coverage(sx, y, r.w, r.h, rad);
+                if (cov == 0)
+                    continue;
+                int32_t x = r.x + sx;
+                if (x < 0 || (uint32_t)x >= bb->width)
+                    continue;
+                gx_color c = src->pixels[(uint32_t)y * src->stride + (uint32_t)sx];
+                if (opacity != 255)
+                    c = gx_color_mul_alpha(c, opacity);
+                if (cov < 255)
+                    c = gx_color_mul_alpha(c, cov);
+                if (GX_A(c) == 0)
+                    continue;
+                gx_color *dp = &bb->pixels[(uint32_t)sy * bb->stride + (uint32_t)x];
+                if (GX_A(c) == 255)
+                    *dp = c;
+                else
+                    *dp = gx_blend(*dp, c);
+            }
             continue;
         }
 
-        int32_t x0 = 0;
-        int32_t x1 = r.w;
+        int32_t x0 = vis.x - r.x;
+        int32_t x1 = x0 + vis.w;
+        if (x0 < 0)
+            x0 = 0;
+        if (x1 > r.w)
+            x1 = r.w;
         if (x0 >= x1)
             continue;
 
@@ -290,15 +295,21 @@ static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity)
     }
 }
 
-static void paint_acrylic(gx_compositor *c, gx_surface *bb, gx_layer *L)
+static void paint_acrylic(gx_compositor *c, gx_surface *bb, gx_layer *L, gx_rect clip)
 {
     gx_surface *blurred = c->wallpaper_blurred ? c->wallpaper_blurred : c->wallpaper;
     gx_rect r = L->bounds;
+    gx_rect vis = gx_rect_empty(clip) ? r : gx_rect_intersect(r, clip);
     int32_t rad = L->corner_radius;
     gx_color tint = L->tint;
 
+    if (gx_rect_empty(vis))
+        return;
+
     if (blurred) {
-        for (int32_t y = 0; y < r.h; y++) {
+        int32_t y0 = vis.y - r.y;
+        int32_t y1 = y0 + vis.h;
+        for (int32_t y = y0; y < y1; y++) {
             int32_t sy = r.y + y;
             if (sy < 0 || (uint32_t)sy >= bb->height)
                 continue;
@@ -307,16 +318,19 @@ static void paint_acrylic(gx_compositor *c, gx_surface *bb, gx_layer *L)
             if ((y & 15) == 0)
                 ps2_poll();
 
-            int32_t x0, x1;
+            int32_t x0 = vis.x - r.x;
+            int32_t x1 = x0 + vis.w;
             if (rad > 0) {
-                round_span(y, r.w, r.h, rad, &x0, &x1);
-                if (x0 > 0)
-                    x0--;
-                if (x1 < r.w)
-                    x1++;
-            } else {
-                x0 = 0;
-                x1 = r.w;
+                int32_t rx0, rx1;
+                round_span(y, r.w, r.h, rad, &rx0, &rx1);
+                if (rx0 > 0)
+                    rx0--;
+                if (rx1 < r.w)
+                    rx1++;
+                if (x0 < rx0)
+                    x0 = rx0;
+                if (x1 > rx1)
+                    x1 = rx1;
             }
             for (int32_t x = x0; x < x1; x++) {
                 int32_t sx = r.x + x;
@@ -341,59 +355,87 @@ static void paint_acrylic(gx_compositor *c, gx_surface *bb, gx_layer *L)
         }
     }
 
-    blit_layer(bb, L, L->opacity ? L->opacity : 255);
+    blit_layer(bb, L, L->opacity ? L->opacity : 255, clip);
 }
 
-static void paint_blur_behind(gx_compositor *c, gx_surface *bb, gx_layer *L)
+static void paint_wallpaper_rect(gx_compositor *c, gx_surface *dst, gx_rect clip)
 {
-    /* Live per-frame blur: sample pre-blurred wallpaper (set once). */
-    paint_acrylic(c, bb, L);
-}
+    gx_color fallback = GX_RGB(20, 22, 30);
 
-void gx_compositor_compose(gx_compositor *c)
-{
-    if (!c || !c->device || !c->device->backbuffer)
+    if (!c->wallpaper) {
+        gx_accel_fill(dst, clip, fallback);
         return;
-
-    gx_surface *bb = c->device->backbuffer;
-
-    if (c->wallpaper) {
-        if (c->wallpaper->width == 1 && c->wallpaper->height == 1) {
-            gx_surface_clear(bb, c->wallpaper->pixels[0]);
-        } else if (c->wallpaper->width == bb->width &&
-                   c->wallpaper->height == bb->height &&
-                   c->wallpaper->stride == bb->stride) {
-            memcpy(bb->pixels, c->wallpaper->pixels,
-                   (size_t)bb->stride * bb->height * sizeof(gx_color));
-        } else {
-            gx_accel_blit(bb, 0, 0, c->wallpaper);
-        }
-    } else {
-        gx_surface_clear(bb, GX_RGB(20, 22, 30));
     }
 
+    if (c->wallpaper->width == 1 && c->wallpaper->height == 1) {
+        gx_accel_fill(dst, clip, c->wallpaper->pixels[0]);
+        return;
+    }
+
+    if (c->wallpaper->width == dst->width &&
+        c->wallpaper->height == dst->height &&
+        c->wallpaper->stride == dst->stride) {
+        for (int32_t y = 0; y < clip.h; y++) {
+            int32_t sy = clip.y + y;
+            memcpy(&dst->pixels[(uint32_t)sy * dst->stride + (uint32_t)clip.x],
+                   &c->wallpaper->pixels[(uint32_t)sy * c->wallpaper->stride +
+                                         (uint32_t)clip.x],
+                   (size_t)clip.w * sizeof(gx_color));
+        }
+        return;
+    }
+
+    gx_accel_blit_rect(dst, clip.x, clip.y, c->wallpaper, clip);
+}
+
+void gx_compositor_compose_rect(gx_compositor *c, gx_surface *dst, gx_rect clip)
+{
+    gx_rect screen;
     int ids[GX_MAX_LAYERS];
     int n = 0;
+
+    if (!c || !dst || !dst->pixels)
+        return;
+
+    screen = gx_rect_make(0, 0, (int32_t)dst->width, (int32_t)dst->height);
+    clip = gx_rect_intersect(clip, screen);
+    if (gx_rect_empty(clip))
+        return;
+
+    paint_wallpaper_rect(c, dst, clip);
+
     sort_ids_by_z(c, ids, &n);
 
     for (int i = 0; i < n; i++) {
         gx_layer *L = &c->layers[ids[i]];
         /* Drain mouse/keyboard between layers so compose doesn't starve input. */
         gx_server_poll_input();
+        if (gx_rect_empty(gx_rect_intersect(L->bounds, clip)))
+            continue;
         switch (L->style) {
         case GX_LAYER_ACRYLIC:
-            paint_acrylic(c, bb, L);
+            paint_acrylic(c, dst, L, clip);
             break;
         case GX_LAYER_BLUR_BEHIND:
-            paint_blur_behind(c, bb, L);
+            paint_acrylic(c, dst, L, clip);
             break;
         case GX_LAYER_ALPHA:
-            blit_layer(bb, L, L->opacity ? L->opacity : 255);
+            blit_layer(dst, L, L->opacity ? L->opacity : 255, clip);
             break;
         case GX_LAYER_OPAQUE:
         default:
-            blit_layer(bb, L, 255);
+            blit_layer(dst, L, 255, clip);
             break;
         }
     }
+}
+
+void gx_compositor_compose(gx_compositor *c)
+{
+    gx_surface *bb;
+    if (!c || !c->device || !c->device->backbuffer)
+        return;
+    bb = c->device->backbuffer;
+    gx_compositor_compose_rect(c, bb,
+                               gx_rect_make(0, 0, (int32_t)bb->width, (int32_t)bb->height));
 }

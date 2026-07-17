@@ -128,16 +128,20 @@ static void apply_layer_style(wm_window *w, gx_layer *layer)
 void wm_sync_layer(wm_t *wm, int id)
 {
     wm_window *w = slot_by_id(wm, id);
+    gx_rect prev;
     if (!w)
         return;
     gx_layer *L = gx_compositor_layer(wm->comp, w->layer_id);
     if (!L)
         return;
+    prev = L->bounds;
     L->bounds = w->frame;
     L->surface = w->surface;
     L->visible = effective_visible(&w->opts);
     apply_layer_style(w, L);
-    gx_server_mark_dirty();
+    /* Geometry/style sync: damage previous and new bounds (not full screen). */
+    gx_server_mark_dirty_rect(prev);
+    gx_server_mark_dirty_rect(w->frame);
 }
 
 int wm_init(wm_t *wm, gx_compositor *comp)
@@ -366,15 +370,38 @@ int wm_map(wm_t *wm, int id, wm_map_info *out)
 
 void wm_move(wm_t *wm, int id, int32_t x, int32_t y)
 {
-    ugx_window_opts opts;
     wm_window *w = slot_by_id(wm, id);
+    gx_layer *L;
+    gx_rect old;
+
     if (!w)
         return;
-    opts = w->opts;
-    opts.maximized = 0;
-    opts.x = x;
-    opts.y = y;
-    (void)wm_apply_opts(wm, id, &opts);
+
+    /* Maximized/fullscreen exit still goes through the full opts path. */
+    if (w->opts.maximized || w->opts.fullscreen) {
+        ugx_window_opts opts = w->opts;
+        opts.maximized = 0;
+        opts.fullscreen = 0;
+        opts.x = x;
+        opts.y = y;
+        (void)wm_apply_opts(wm, id, &opts);
+        return;
+    }
+
+    if (w->frame.x == x && w->frame.y == y)
+        return;
+
+    /* Move = transform only: reuse surface, damage old+new frames (C03/T10). */
+    old = w->frame;
+    w->frame.x = x;
+    w->frame.y = y;
+    w->opts.x = x;
+    w->opts.y = y;
+    L = gx_compositor_layer(wm->comp, w->layer_id);
+    if (L)
+        L->bounds = w->frame;
+    gx_server_mark_dirty_rect(old);
+    gx_server_mark_dirty_rect(w->frame);
 }
 
 void wm_resize(wm_t *wm, int id, int32_t wdt, int32_t hgt)
@@ -407,7 +434,8 @@ void wm_focus(wm_t *wm, int id)
     if (w && !w->opts.always_on_bottom)
         gx_compositor_raise(wm->comp, w->layer_id);
     raise_topmost_windows(wm);
-    gx_server_mark_dirty();
+    if (w)
+        gx_server_mark_dirty_rect(w->frame);
 }
 
 void wm_show(wm_t *wm, int id, int visible)

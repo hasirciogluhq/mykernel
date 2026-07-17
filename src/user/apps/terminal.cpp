@@ -1481,10 +1481,11 @@ extern "C" void mke_main(void)
             }
         }
 
-        if (g_dirty)
+        /* Present only after content damage — shell (os-ui) still paces WM moves. */
+        if (g_dirty) {
             paint();
-
-        (void)hsrc::sdk::present();
+            (void)hsrc::sdk::present();
+        }
         hsrc::sdk::yield();
     }
 }

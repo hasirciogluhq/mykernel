@@ -719,9 +719,10 @@ extern "C" void mke_main(void)
             g_prev_input = in;
         }
 
-        if (g_dirty)
+        if (g_dirty) {
             paint();
-        (void)hsrc::sdk::present();
+            (void)hsrc::sdk::present();
+        }
         hsrc::sdk::yield();
     }
 }

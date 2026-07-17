@@ -29,6 +29,13 @@ static inline int gx_rect_empty(gx_rect r)
 }
 
 gx_rect gx_rect_intersect(gx_rect a, gx_rect b);
+gx_rect gx_rect_union(gx_rect a, gx_rect b);
 gx_rect gx_rect_make(int32_t x, int32_t y, int32_t w, int32_t h);
+static inline int32_t gx_rect_area(gx_rect r)
+{
+    if (gx_rect_empty(r))
+        return 0;
+    return r.w * r.h;
+}
 
 #endif

@@ -616,9 +616,10 @@ extern "C" void mke_main(void)
             refresh_monitor(true);
         }
 
-        if (g_dirty)
+        if (g_dirty) {
             paint();
-        (void)hsrc::sdk::present();
+            (void)hsrc::sdk::present();
+        }
         hsrc::sdk::yield();
     }
 }

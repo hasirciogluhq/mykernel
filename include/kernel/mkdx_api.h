@@ -10,7 +10,8 @@
 typedef struct mkdx_api {
     int  (*info)(uint32_t *w, uint32_t *h, uint32_t *bpp);
     int  (*present)(void);
-    void (*mark_dirty)(void);
+    /* win_id > 0 → damage that window's frame; else full-screen dirty. */
+    void (*mark_dirty)(int win_id);
 
     long (*wm_create)(const void *args, uint32_t owner_pid);
     int  (*wm_set)(int id, const void *opts);

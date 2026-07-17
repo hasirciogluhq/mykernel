@@ -196,8 +196,20 @@ static int api_present(void)
     return mkdx_present();
 }
 
-static void api_mark_dirty(void)
+static void api_mark_dirty(int win_id)
 {
+    gx_server *s = gx_server_get();
+    wm_window *w;
+
+    if (!s)
+        return;
+    if (win_id > 0) {
+        w = wm_get(&s->wm, win_id);
+        if (w) {
+            gx_server_mark_dirty_rect(w->frame);
+            return;
+        }
+    }
     gx_server_mark_dirty();
 }
 
@@ -365,7 +377,7 @@ static int api_fill(const void *args, int rounded)
         gx_accel_fill_round(w->surface, r, a->radius, a->color);
     else
         gx_accel_fill(w->surface, r, a->color);
-    gx_server_mark_dirty();
+    gx_server_mark_dirty_rect(w->frame);
     return 0;
 }
 

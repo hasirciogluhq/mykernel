@@ -42,5 +42,7 @@ void gx_compositor_remove_layer(gx_compositor *c, int id);
 gx_layer *gx_compositor_layer(gx_compositor *c, int id);
 void gx_compositor_raise(gx_compositor *c, int id);
 void gx_compositor_compose(gx_compositor *c);
+/* Compose only inside clip into dst (cursor-free scene). clip empty → no-op. */
+void gx_compositor_compose_rect(gx_compositor *c, gx_surface *dst, gx_rect clip);
 
 #endif

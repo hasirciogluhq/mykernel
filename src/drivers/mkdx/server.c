@@ -116,8 +116,44 @@ static void present_rect(gx_server *s, int32_t x, int32_t y, int32_t w, int32_t 
 
 void gx_server_mark_dirty(void)
 {
-    if (g_server.ready)
+    if (!g_server.ready)
+        return;
+    g_server.dirty = 1;
+    g_server.dirty_full = 1;
+}
+
+void gx_server_mark_dirty_rect(gx_rect r)
+{
+    gx_rect screen;
+    int32_t screen_area;
+    int32_t union_area;
+
+    if (!g_server.ready)
+        return;
+    if (g_server.dirty_full) {
         g_server.dirty = 1;
+        return;
+    }
+
+    screen = gx_rect_make(0, 0, (int32_t)g_server.device.mode.width,
+                          (int32_t)g_server.device.mode.height);
+    r = gx_rect_intersect(r, screen);
+    if (gx_rect_empty(r))
+        return;
+
+    if (!g_server.dirty || gx_rect_empty(g_server.dirty_rect))
+        g_server.dirty_rect = r;
+    else
+        g_server.dirty_rect = gx_rect_union(g_server.dirty_rect, r);
+
+    /* Escalate huge unions to a full refresh — cheaper than fragmented work. */
+    screen_area = gx_rect_area(screen);
+    union_area = gx_rect_area(g_server.dirty_rect);
+    if (screen_area > 0 && union_area * 5 >= screen_area * 3) {
+        g_server.dirty_full = 1;
+    }
+
+    g_server.dirty = 1;
 }
 
 static void flush_cursor_at(gx_server *s, int32_t mx, int32_t my)
@@ -168,21 +204,19 @@ void gx_server_poll_input(void)
                 wm_on_mouse_move(&s->wm, last_move.x, last_move.y);
                 have_move = 0;
             }
+            /* Focus/raise/drag paths mark their own damage rects. */
             wm_on_mouse_button(&s->wm, ev.button, 1, ev.x, ev.y);
-            gx_server_mark_dirty();
         } else if (ev.type == MOUSE_EV_UP) {
             if (have_move) {
                 wm_on_mouse_move(&s->wm, last_move.x, last_move.y);
                 have_move = 0;
             }
             wm_on_mouse_button(&s->wm, ev.button, 0, ev.x, ev.y);
-            gx_server_mark_dirty();
         }
     }
     if (have_move) {
+        /* wm_move damages old+new frames; do not escalate to full-screen dirty. */
         wm_on_mouse_move(&s->wm, last_move.x, last_move.y);
-        if (s->wm.drag_id >= 0)
-            gx_server_mark_dirty();
     }
 
     while ((ch = keyboard_getchar()) >= 0)
@@ -241,6 +275,8 @@ int gx_server_init(void)
     g_server.cursor_x = -1;
     g_server.cursor_y = -1;
     g_server.dirty = 1;
+    g_server.dirty_full = 1;
+    g_server.dirty_rect = gx_rect_make(0, 0, 0, 0);
     g_server.ready = 1;
     return 0;
 }
@@ -293,6 +329,8 @@ void gx_server_present(void)
     int32_t mx, my;
     gx_surface *bb;
     gx_surface *scene;
+    gx_rect damage;
+    int full;
 
     if (!s)
         return;
@@ -315,8 +353,24 @@ void gx_server_present(void)
         static int s_present_log;
         int li, nvis = 0;
 
+        full = s->dirty_full || gx_rect_empty(s->dirty_rect);
+        if (full) {
+            damage = gx_rect_make(0, 0, (int32_t)scene->width, (int32_t)scene->height);
+        } else {
+            damage = gx_rect_intersect(
+                s->dirty_rect,
+                gx_rect_make(0, 0, (int32_t)scene->width, (int32_t)scene->height));
+            if (gx_rect_empty(damage)) {
+                s->dirty = 0;
+                s->dirty_full = 0;
+                flush_cursor_at(s, mx, my);
+                return;
+            }
+        }
+
+        /* Compose into the cursor-free scene buffer (partial when possible). */
         g_present_busy = 1;
-        gx_compositor_compose(&s->comp);
+        gx_compositor_compose_rect(&s->comp, scene, damage);
         g_present_busy = 0;
 
         /* Compose can take a long time — drain PS/2 and take latest pointer. */
@@ -352,26 +406,39 @@ void gx_server_present(void)
             }
             klog("[gx] present nvis=");
             serial_print_uint((uint32_t)nvis);
-            klog(" bb0=");
-            serial_print_hex(bb->pixels[0]);
-            klog(" bb_menubar=");
-            if (bb->height > 2 && bb->width > 2)
-                serial_print_hex(bb->pixels[2 * bb->stride + 2]);
+            klog(full ? " full" : " partial");
             klog("\n");
             s_present_log++;
         }
 
-        memcpy(scene->pixels, bb->pixels,
-               (size_t)scene->stride * scene->height * sizeof(gx_color));
-
+        /* Scene → backbuffer for the damaged region, then overlay cursor. */
+        blit_scene_rect_to_bb(s, damage.x, damage.y, damage.w, damage.h);
+        /* Also refresh previous cursor footprint from the new scene. */
+        if (s->cursor_x >= 0 && s->cursor_y >= 0)
+            blit_scene_rect_to_bb(s, s->cursor_x, s->cursor_y, CURSOR_W, CURSOR_H);
         draw_cursor_on_bb(s, mx, my);
-        present_frame_banded(s, ops, bb, &mx, &my);
+
+        if (full) {
+            present_frame_banded(s, ops, bb, &mx, &my);
+        } else {
+            gx_rect pr = damage;
+            /* Include old/new cursor rects so partial present stays tear-free. */
+            if (s->cursor_x >= 0 && s->cursor_y >= 0)
+                pr = gx_rect_union(pr, gx_rect_make(s->cursor_x, s->cursor_y,
+                                                    CURSOR_W, CURSOR_H));
+            pr = gx_rect_union(pr, gx_rect_make(mx, my, CURSOR_W, CURSOR_H));
+            g_present_busy = 1;
+            present_rect(s, pr.x, pr.y, pr.w, pr.h);
+            g_present_busy = 0;
+        }
 
         s->cursor_x = mx;
         s->cursor_y = my;
         s->dirty = 0;
+        s->dirty_full = 0;
+        s->dirty_rect = gx_rect_make(0, 0, 0, 0);
 
-        /* Apply any motion that arrived on the last band. */
+        /* Apply any motion that arrived during present. */
         gx_server_poll_input();
         ms = mouse_get();
         if (ms)

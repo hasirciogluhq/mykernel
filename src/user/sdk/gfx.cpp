@@ -181,10 +181,16 @@ void Surface::clear(Color c)
 {
     if (!valid())
         return;
-    const uint32_t n = stride() * height();
     Color *p = pixels();
-    for (uint32_t i = 0; i < n; i++)
-        p[i] = c;
+    const uint32_t w = stride();
+    const uint32_t h = height();
+    if (w == 0 || h == 0)
+        return;
+    /* Fill first row, then memcpy-replicate (cache-friendly). */
+    for (uint32_t x = 0; x < w; x++)
+        p[x] = c;
+    for (uint32_t y = 1; y < h; y++)
+        memcpy(p + y * w, p, (size_t)w * sizeof(Color));
 }
 
 void Surface::set(int x, int y, Color c)
@@ -217,24 +223,99 @@ void Surface::blend(int x, int y, Color c)
 
 void Surface::fill(int x, int y, int w, int h, Color c)
 {
-    if (color_a(c) == 255) {
-        for (int yy = 0; yy < h; yy++)
-            for (int xx = 0; xx < w; xx++)
-                set(x + xx, y + yy, c);
-    } else {
-        for (int yy = 0; yy < h; yy++)
-            for (int xx = 0; xx < w; xx++)
-                blend(x + xx, y + yy, c);
+    if (!valid() || w <= 0 || h <= 0)
+        return;
+
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < 0 ? 0 : y;
+    int x1 = x + w;
+    int y1 = y + h;
+    if (x1 > (int)width())
+        x1 = (int)width();
+    if (y1 > (int)height())
+        y1 = (int)height();
+    if (x0 >= x1 || y0 >= y1)
+        return;
+
+    Color *base = pixels();
+    const uint32_t st = stride();
+    const int opaque = color_a(c) == 255;
+
+    for (int yy = y0; yy < y1; yy++) {
+        Color *row = base + (uint32_t)yy * st;
+        if (opaque) {
+            for (int xx = x0; xx < x1; xx++)
+                row[xx] = c;
+        } else {
+            for (int xx = x0; xx < x1; xx++) {
+                if (color_a(row[xx]) == 0)
+                    row[xx] = c;
+                else
+                    row[xx] = color_blend(row[xx], c);
+            }
+        }
     }
 }
 
 void Surface::fill_round(int x, int y, int w, int h, int radius, Color c)
 {
-    if (w <= 0 || h <= 0)
+    if (!valid() || w <= 0 || h <= 0)
         return;
-    for (int ly = 0; ly < h; ly++) {
-        for (int lx = 0; lx < w; lx++) {
-            uint8_t cov = round_coverage(lx, ly, w, h, radius);
+    if (radius <= 0) {
+        fill(x, y, w, h, c);
+        return;
+    }
+
+    int r = radius;
+    if (r * 2 > w)
+        r = w / 2;
+    if (r * 2 > h)
+        r = h / 2;
+    if (r <= 0) {
+        fill(x, y, w, h, c);
+        return;
+    }
+
+    /* Straight regions via fast fill; only corner tiles need AA coverage. */
+    if (w > 2 * r)
+        fill(x + r, y, w - 2 * r, h, c);
+    if (h > 2 * r) {
+        fill(x, y + r, r, h - 2 * r, c);
+        fill(x + w - r, y + r, r, h - 2 * r, c);
+    }
+
+    for (int ly = 0; ly < r; ly++) {
+        for (int lx = 0; lx < r; lx++) {
+            uint8_t cov = round_coverage(lx, ly, w, h, r);
+            if (cov == 0)
+                continue;
+            if (cov == 255 && color_a(c) == 255)
+                set(x + lx, y + ly, c);
+            else
+                blend(x + lx, y + ly, color_mul_alpha(c, cov));
+        }
+        for (int lx = w - r; lx < w; lx++) {
+            uint8_t cov = round_coverage(lx, ly, w, h, r);
+            if (cov == 0)
+                continue;
+            if (cov == 255 && color_a(c) == 255)
+                set(x + lx, y + ly, c);
+            else
+                blend(x + lx, y + ly, color_mul_alpha(c, cov));
+        }
+    }
+    for (int ly = h - r; ly < h; ly++) {
+        for (int lx = 0; lx < r; lx++) {
+            uint8_t cov = round_coverage(lx, ly, w, h, r);
+            if (cov == 0)
+                continue;
+            if (cov == 255 && color_a(c) == 255)
+                set(x + lx, y + ly, c);
+            else
+                blend(x + lx, y + ly, color_mul_alpha(c, cov));
+        }
+        for (int lx = w - r; lx < w; lx++) {
+            uint8_t cov = round_coverage(lx, ly, w, h, r);
             if (cov == 0)
                 continue;
             if (cov == 255 && color_a(c) == 255)
@@ -417,28 +498,15 @@ void Window::destroy()
 
 void Window::fill(int x, int y, int w, int h, Color c)
 {
-    ugx_fill_args a{};
-    a.win = id_;
-    a.x = x;
-    a.y = y;
-    a.w = w;
-    a.h = h;
-    a.color = c;
-    a.radius = 0;
-    (void)syscall1(SYS_GX_FILL, (long)&a);
+    /* Userspace mapped surface — avoid per-primitive kernel round-trips (S01/P01). */
+    if (surf_.valid())
+        surf_.fill(x, y, w, h, c);
 }
 
 void Window::fill_round(int x, int y, int w, int h, int radius, Color c)
 {
-    ugx_fill_args a{};
-    a.win = id_;
-    a.x = x;
-    a.y = y;
-    a.w = w;
-    a.h = h;
-    a.color = c;
-    a.radius = radius;
-    (void)syscall1(SYS_GX_FILL_ROUND, (long)&a);
+    if (surf_.valid())
+        surf_.fill_round(x, y, w, h, radius, c);
 }
 
 void Window::show(bool visible)
@@ -566,7 +634,7 @@ bool Window::handle_chrome_hit(ChromeHit hit)
 
 void Window::damage()
 {
-    (void)syscall1(SYS_GX_DAMAGE, 0);
+    (void)syscall1(SYS_GX_DAMAGE, id_);
 }
 
 bool screen_info(ScreenInfo &out)

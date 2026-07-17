@@ -983,12 +983,12 @@ static long do_wm_pop_key(long id)
     return api->wm_pop_key((int)id);
 }
 
-static long do_gx_damage(void)
+static long do_gx_damage(long win_id)
 {
     const mkdx_api_t *api = mkdx();
     if (!api || !api->mark_dirty)
         return -1;
-    api->mark_dirty();
+    api->mark_dirty((int)win_id);
     return 0;
 }
 
@@ -1533,7 +1533,7 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
     case SYS_GX_SET_WALLPAPER: return do_gx_set_wallpaper(a1);
     case SYS_INPUT_STATE:      return do_input_state(a1);
     case SYS_WM_POP_KEY:       return do_wm_pop_key(a1);
-    case SYS_GX_DAMAGE:        return do_gx_damage();
+    case SYS_GX_DAMAGE:        return do_gx_damage(a1);
     case SYS_WM_GET_FRAME:     return do_wm_get_frame(a1, a2);
     case SYS_WM_FIND:          return do_wm_find(a1);
 

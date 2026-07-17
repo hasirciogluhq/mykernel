@@ -161,8 +161,15 @@ static int bga_present_rect(const uint32_t *src, uint32_t src_stride_px,
         if (g_mode.bytes_per_pixel == 4) {
             volatile uint32_t *drow =
                 (volatile uint32_t *)(g_mode.addr + (y + row) * g_mode.pitch + x * 4);
-            uint32_t col;
-            for (col = 0; col < w; col++)
+            uint32_t col = 0;
+            /* Unrolled dword stores — MMIO-safe, better ILP than scalar loop. */
+            for (; col + 4 <= w; col += 4) {
+                drow[col] = srow[col];
+                drow[col + 1] = srow[col + 1];
+                drow[col + 2] = srow[col + 2];
+                drow[col + 3] = srow[col + 3];
+            }
+            for (; col < w; col++)
                 drow[col] = srow[col];
         } else {
             uint8_t *drow = g_mode.addr + (y + row) * g_mode.pitch +

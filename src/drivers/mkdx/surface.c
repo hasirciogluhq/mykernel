@@ -23,6 +23,19 @@ gx_rect gx_rect_intersect(gx_rect a, gx_rect b)
     return gx_rect_make(x0, y0, x1 - x0, y1 - y0);
 }
 
+gx_rect gx_rect_union(gx_rect a, gx_rect b)
+{
+    if (gx_rect_empty(a))
+        return b;
+    if (gx_rect_empty(b))
+        return a;
+    int32_t x0 = a.x < b.x ? a.x : b.x;
+    int32_t y0 = a.y < b.y ? a.y : b.y;
+    int32_t x1 = (a.x + a.w) > (b.x + b.w) ? (a.x + a.w) : (b.x + b.w);
+    int32_t y1 = (a.y + a.h) > (b.y + b.h) ? (a.y + a.h) : (b.y + b.h);
+    return gx_rect_make(x0, y0, x1 - x0, y1 - y0);
+}
+
 gx_surface *gx_surface_create(uint32_t w, uint32_t h)
 {
     if (w == 0 || h == 0)
@@ -75,8 +88,17 @@ void gx_surface_clear(gx_surface *s, gx_color c)
     if (!s || !s->pixels)
         return;
     size_t n = (size_t)s->stride * s->height;
-    for (size_t i = 0; i < n; i++)
-        s->pixels[i] = c;
+    if (c == 0) {
+        memset(s->pixels, 0, n * sizeof(gx_color));
+        return;
+    }
+    /* First row, then replicate — fewer stores than a flat fill loop. */
+    gx_color *row0 = s->pixels;
+    for (uint32_t x = 0; x < s->stride; x++)
+        row0[x] = c;
+    for (uint32_t y = 1; y < s->height; y++)
+        memcpy(s->pixels + (size_t)y * s->stride, row0,
+               (size_t)s->stride * sizeof(gx_color));
 }
 
 gx_color gx_surface_get(const gx_surface *s, int32_t x, int32_t y)
