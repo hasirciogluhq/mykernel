@@ -108,6 +108,9 @@ typedef struct {
     size_t count;
 } ahci_scan_t;
 
+static ahci_port_t *g_ahci_ports[AHCI_MAX_CONTROLLERS * AHCI_PORTS];
+static size_t g_ahci_port_count;
+
 static inline uint32_t mmio_r32(volatile uint8_t *base, uint32_t off)
 {
     return *(volatile uint32_t *)(base + off);
@@ -192,6 +195,7 @@ static int ahci_issue(ahci_port_t *port, bio_t *bio, void *data, size_t len,
     size_t left;
     uint32_t prdtl = 0;
     int slot;
+    int spin;
 
     if (!port || !data || !len || !sectors || sectors > 65536u ||
         len > AHCI_PRDT_MAX * AHCI_PRDT_BYTES)
@@ -202,6 +206,12 @@ static int ahci_issue(ahci_port_t *port, bio_t *bio, void *data, size_t len,
     }
     if (slot == AHCI_SLOTS)
         return -EAGAIN;
+    for (spin = 0; spin < 1000000; spin++) {
+        if (!(mmio_r32(port->regs, PX_TFD) & 0x88u))
+            break;
+    }
+    if (spin == 1000000)
+        return -EIO;
 
     hdr = &port->cmd_list[slot];
     table = (ahci_cmd_table_t *)(port->tables + (size_t)slot * AHCI_TABLE_BYTES);
@@ -251,11 +261,11 @@ static int ahci_submit(bio_t *bio)
 {
     ahci_port_t *port;
     uint32_t sectors;
-    if (!bio || !bio->bdev || !bio->data || !bio->len ||
-        (bio->len & 511u) || bio->sector + bio->len / 512u > bio->bdev->capacity)
+    if (!bio || !bio->bdev || !bio->data || !bio->len || (bio->len & 511u))
         return -EINVAL;
     sectors = (uint32_t)(bio->len / 512u);
-    if (!sectors || sectors > 65536u)
+    if (!sectors || sectors > 65536u || bio->sector > bio->bdev->capacity ||
+        sectors > bio->bdev->capacity - bio->sector)
         return -EINVAL;
     port = (ahci_port_t *)bio->bdev->private_data;
     return ahci_issue(port, bio, bio->data, bio->len, bio->sector, sectors,
@@ -275,10 +285,18 @@ static const block_ops_t ahci_ops = {
     .ioctl = NULL,
 };
 
+static void ahci_driver_poll(driver_t *drv)
+{
+    size_t i;
+    (void)drv;
+    for (i = 0; i < g_ahci_port_count; i++)
+        ahci_port_poll(g_ahci_ports[i]);
+}
+
 static int ahci_identify(ahci_port_t *port, uint64_t *capacity)
 {
     uint16_t *identify;
-    int result = -EIO;
+    int result = 1;
     int spin;
 
     identify = (uint16_t *)kmalloc_aligned(512, 512);
@@ -287,9 +305,11 @@ static int ahci_identify(ahci_port_t *port, uint64_t *capacity)
     memset(identify, 0, 512);
     if (ahci_issue(port, NULL, identify, 512, 0, 1, 0, ATA_CMD_IDENTIFY, &result) < 0)
         return -EIO;
-    for (spin = 0; spin < 1000000 && result == -EIO; spin++)
+    for (spin = 0; spin < 1000000 && result == 1; spin++)
         ahci_port_poll(port);
-    if (result < 0)
+    if (result == 1)
+        return -EIO;
+    if (result != 0)
         return result;
     *capacity = (uint64_t)identify[100] |
                 ((uint64_t)identify[101] << 16) |
@@ -360,6 +380,8 @@ static int ahci_init_port(ahci_controller_t *ctrl, uint32_t portno,
     if (api->scan_partitions)
         api->scan_partitions(&port->bdev);
     ctrl->ports[portno] = port;
+    if (g_ahci_port_count < AHCI_MAX_CONTROLLERS * AHCI_PORTS)
+        g_ahci_ports[g_ahci_port_count++] = port;
     (*disk_index)++;
     return 1;
 }
@@ -445,6 +467,7 @@ int kmod_init(void)
     d.flags = DRIVER_FLAG_POLL;
     d.priority = 80;
     d.init = ahci_probe_init;
+    d.poll = ahci_driver_poll;
     if (driver_register(&d) < 0)
         return -1;
     return driver_load("ahci", NULL) < 0 ? -1 : 0;
