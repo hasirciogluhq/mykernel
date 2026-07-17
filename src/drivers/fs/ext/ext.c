@@ -433,7 +433,7 @@ static int ext_iterate_dir(ext_node_t *dir, ext_dir_cb cb, void *ctx)
             if (rec_len < 8 || (off + rec_len) > fs->block_size)
                 break;
 
-            if (inode_no != 0 && name_len > 0 && name_len < 256) {
+            if (inode_no != 0 && name_len > 0) {
                 memcpy(nm, blk + off + 8, name_len);
                 nm[name_len] = 0;
                 rc = cb(ctx, inode_no, ft, nm, name_len);

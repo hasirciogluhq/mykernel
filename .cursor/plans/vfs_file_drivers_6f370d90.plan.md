@@ -22,10 +22,10 @@ todos:
     status: completed
   - id: vfs-features
     content: page cache, dcache, xattr, ioctl, mmap, flock, symlink, poll, notify
-    status: pending
+    status: completed
   - id: module-from-vfs
     content: module_load_path ile disk/initrd uzerinden kmod
-    status: pending
+    status: completed
 isProject: false
 ---
 

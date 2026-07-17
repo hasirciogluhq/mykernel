@@ -19,6 +19,12 @@
 #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
 #define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
 
+#define MS_RDONLY 1
+#define MS_NOSUID 2
+#define MS_NODEV  4
+#define MS_NOEXEC 8
+#define MS_BIND   0x1000
+
 struct inode;
 struct dentry;
 struct file;

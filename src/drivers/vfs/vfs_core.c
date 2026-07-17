@@ -4,9 +4,11 @@
 #include <kernel/errno.h>
 #include <kernel/heap.h>
 #include <kernel/string.h>
+#include <kernel/module.h>
 #include <drivers/vfs_fs.h>
 #include <drivers/driver.h>
 #include <drivers/vga.h>
+#include "vfs_internal.h"
 
 #define VFS_MAX_OPEN     64
 #define VFS_MAX_MOUNTS   16
@@ -16,14 +18,6 @@ static vfsmount_t g_mounts[VFS_MAX_MOUNTS];
 static file_system_type_t *g_fs_types;
 static vfsmount_t *g_root_mnt;
 static int g_next_ino = 1;
-
-/* ---- helpers ---- */
-
-static int call_or_enotsup_int(void *fn)
-{
-    (void)fn;
-    return -ENOTSUP;
-}
 
 static inode_t *inode_alloc(super_block_t *sb, uint32_t mode)
 {
@@ -184,12 +178,15 @@ static dentry_t *path_walk(const char *path, int *err)
             return NULL;
         }
 
-        {
+        next = vfs_dcache_lookup(cur, tok);
+        if (!next) {
             dentry_t probe;
             memset(&probe, 0, sizeof(probe));
             strncpy(probe.d_name, tok, sizeof(probe.d_name) - 1);
             probe.d_parent = cur;
             next = cur->d_inode->i_op->lookup(cur->d_inode, &probe);
+            if (next)
+                vfs_dcache_add(next);
         }
         cur->d_ref--;
         if (!next || !next->d_inode) {
@@ -201,6 +198,31 @@ static dentry_t *path_walk(const char *path, int *err)
         tok = slash;
     }
     return cur;
+}
+
+static int split_parent_leaf(const char *path, char *parent, size_t psz, char *leaf, size_t lsz)
+{
+    const char *slash;
+    size_t plen;
+    if (!path || path[0] != '/')
+        return -EINVAL;
+    slash = path + strlen(path);
+    while (slash > path && slash[-1] != '/')
+        slash--;
+    plen = (size_t)(slash - path);
+    if (plen == 0 || plen >= psz)
+        return -ENAMETOOLONG;
+    memcpy(parent, path, plen);
+    parent[plen] = 0;
+    if (plen > 1 && parent[plen - 1] == '/')
+        parent[plen - 1] = 0;
+    if (parent[0] == 0)
+        strcpy(parent, "/");
+    strncpy(leaf, slash, lsz - 1);
+    leaf[lsz - 1] = 0;
+    if (!leaf[0])
+        return -EINVAL;
+    return 0;
 }
 
 static int vfs_do_mount(const char *source, const char *target,
@@ -501,21 +523,103 @@ static int vfs_do_mkdir(const char *path, int mode)
 
 static int vfs_do_rmdir(const char *path)
 {
-    (void)path;
-    return call_or_enotsup_int(NULL);
+    char parent[VFS_PATH_MAX], leaf[64];
+    dentry_t *dir, *child, probe;
+    int err = 0, rc;
+    if (split_parent_leaf(path, parent, sizeof(parent), leaf, sizeof(leaf)) < 0)
+        return -EINVAL;
+    dir = path_walk(parent, &err);
+    if (!dir)
+        return err ? err : -ENOENT;
+    if (!dir->d_inode || !dir->d_inode->i_op || !dir->d_inode->i_op->rmdir) {
+        dir->d_ref--;
+        return -ENOTSUP;
+    }
+    memset(&probe, 0, sizeof(probe));
+    strncpy(probe.d_name, leaf, sizeof(probe.d_name) - 1);
+    probe.d_parent = dir;
+    child = dir->d_inode->i_op->lookup(dir->d_inode, &probe);
+    if (!child) {
+        dir->d_ref--;
+        return -ENOENT;
+    }
+    rc = dir->d_inode->i_op->rmdir(dir->d_inode, child);
+    vfs_dcache_remove(child);
+    vfs_fsnotify_event(path, FS_DELETE, leaf);
+    dir->d_ref--;
+    return rc;
 }
 
 static int vfs_do_unlink(const char *path)
 {
-    (void)path;
-    return call_or_enotsup_int(NULL);
+    char parent[VFS_PATH_MAX], leaf[64];
+    dentry_t *dir, *child, probe;
+    int err = 0, rc;
+    if (split_parent_leaf(path, parent, sizeof(parent), leaf, sizeof(leaf)) < 0)
+        return -EINVAL;
+    dir = path_walk(parent, &err);
+    if (!dir)
+        return err ? err : -ENOENT;
+    if (!dir->d_inode || !dir->d_inode->i_op || !dir->d_inode->i_op->unlink) {
+        dir->d_ref--;
+        return -ENOTSUP;
+    }
+    memset(&probe, 0, sizeof(probe));
+    strncpy(probe.d_name, leaf, sizeof(probe.d_name) - 1);
+    probe.d_parent = dir;
+    child = dir->d_inode->i_op->lookup(dir->d_inode, &probe);
+    if (!child) {
+        dir->d_ref--;
+        return -ENOENT;
+    }
+    rc = dir->d_inode->i_op->unlink(dir->d_inode, child);
+    vfs_dcache_remove(child);
+    vfs_fsnotify_event(path, FS_DELETE, leaf);
+    dir->d_ref--;
+    return rc;
 }
 
-static int vfs_do_rename(const char *a, const char *b)
+static int vfs_do_rename(const char *oldpath, const char *newpath)
 {
-    (void)a;
-    (void)b;
-    return call_or_enotsup_int(NULL);
+    char op[VFS_PATH_MAX], ol[64], np[VFS_PATH_MAX], nl[64];
+    dentry_t *odir, *ndir, oprobe, nprobe, *old_d, *new_d;
+    int err = 0, rc;
+    if (split_parent_leaf(oldpath, op, sizeof(op), ol, sizeof(ol)) < 0)
+        return -EINVAL;
+    if (split_parent_leaf(newpath, np, sizeof(np), nl, sizeof(nl)) < 0)
+        return -EINVAL;
+    odir = path_walk(op, &err);
+    if (!odir)
+        return err ? err : -ENOENT;
+    ndir = path_walk(np, &err);
+    if (!ndir) {
+        odir->d_ref--;
+        return err ? err : -ENOENT;
+    }
+    if (!odir->d_inode || !odir->d_inode->i_op || !odir->d_inode->i_op->rename) {
+        odir->d_ref--;
+        ndir->d_ref--;
+        return -ENOTSUP;
+    }
+    memset(&oprobe, 0, sizeof(oprobe));
+    strncpy(oprobe.d_name, ol, sizeof(oprobe.d_name) - 1);
+    oprobe.d_parent = odir;
+    old_d = odir->d_inode->i_op->lookup(odir->d_inode, &oprobe);
+    if (!old_d) {
+        odir->d_ref--;
+        ndir->d_ref--;
+        return -ENOENT;
+    }
+    memset(&nprobe, 0, sizeof(nprobe));
+    strncpy(nprobe.d_name, nl, sizeof(nprobe.d_name) - 1);
+    nprobe.d_parent = ndir;
+    new_d = &nprobe;
+    rc = odir->d_inode->i_op->rename(odir->d_inode, old_d, ndir->d_inode, new_d);
+    vfs_dcache_remove(old_d);
+    vfs_fsnotify_event(oldpath, FS_MOVE, ol);
+    odir->d_ref--;
+    ndir->d_ref--;
+    return rc;
 }
 
 static int vfs_do_stat(const char *path, void *statbuf)
@@ -706,6 +810,124 @@ static void *api_alloc_dentry(const char *name, void *parent, void *inode)
     return dentry_alloc(name, (dentry_t *)parent, (inode_t *)inode);
 }
 
+static int vfs_do_getxattr(const char *path, const char *name, void *value, size_t size)
+{
+    dentry_t *d;
+    int err = 0, rc;
+    d = path_walk(path, &err);
+    if (!d)
+        return err ? err : -ENOENT;
+    rc = vfs_xattr_get(d->d_inode, name, value, size);
+    d->d_ref--;
+    return rc;
+}
+
+static int vfs_do_setxattr(const char *path, const char *name, const void *value, size_t size, int flags)
+{
+    dentry_t *d;
+    int err = 0, rc;
+    d = path_walk(path, &err);
+    if (!d)
+        return err ? err : -ENOENT;
+    rc = vfs_xattr_set(d->d_inode, name, value, size, flags);
+    vfs_fsnotify_event(path, FS_MODIFY, NULL);
+    d->d_ref--;
+    return rc;
+}
+
+static int vfs_do_listxattr(const char *path, char *list, size_t size)
+{
+    dentry_t *d;
+    int err = 0, rc;
+    d = path_walk(path, &err);
+    if (!d)
+        return err ? err : -ENOENT;
+    rc = vfs_xattr_list(d->d_inode, list, size);
+    d->d_ref--;
+    return rc;
+}
+
+static int vfs_do_removexattr(const char *path, const char *name)
+{
+    dentry_t *d;
+    int err = 0, rc;
+    d = path_walk(path, &err);
+    if (!d)
+        return err ? err : -ENOENT;
+    rc = vfs_xattr_remove(d->d_inode, name);
+    d->d_ref--;
+    return rc;
+}
+
+static int vfs_do_flock(int fd, int cmd, void *fl)
+{
+    if (fd < 0 || fd >= VFS_MAX_OPEN || !g_files[fd].used)
+        return -EBADF;
+    return vfs_flock(&g_files[fd], cmd, (flock_t *)fl);
+}
+
+static ssize_t api_cached_read(void *inode, void *buf, size_t count, off_t pos)
+{
+    return vfs_cached_read((inode_t *)inode, buf, count, pos);
+}
+
+static ssize_t api_cached_write(void *inode, const void *buf, size_t count, off_t pos)
+{
+    return vfs_cached_write((inode_t *)inode, buf, count, pos);
+}
+
+static int api_cache_invalidate(void *inode)
+{
+    return vfs_cache_invalidate((inode_t *)inode);
+}
+
+static int vfs_do_module_load_path(const char *path)
+{
+    int fd;
+    uint8_t *buf;
+    ssize_t n, total = 0;
+    off_t size;
+    int rc;
+
+    if (!path)
+        return -EINVAL;
+    fd = vfs_do_open(path, O_RDONLY);
+    if (fd < 0)
+        return fd;
+    size = vfs_do_lseek(fd, 0, SEEK_END);
+    if (size <= 0) {
+        vfs_do_close(fd);
+        return -EINVAL;
+    }
+    vfs_do_lseek(fd, 0, SEEK_SET);
+    buf = (uint8_t *)kmalloc((size_t)size);
+    if (!buf) {
+        vfs_do_close(fd);
+        return -ENOMEM;
+    }
+    while (total < size) {
+        n = vfs_do_read(fd, buf + total, (size_t)(size - total));
+        if (n <= 0)
+            break;
+        total += n;
+    }
+    vfs_do_close(fd);
+    if (total <= 0) {
+        return -EIO;
+    }
+    {
+        const char *base = path;
+        const char *p = path;
+        while (*p) {
+            if (*p == '/')
+                base = p + 1;
+            p++;
+        }
+        rc = modules_load_blob(base, buf, (size_t)total);
+    }
+    return rc;
+}
+
 static const vfs_api_t g_vfs_api = {
     .open = vfs_do_open,
     .read = vfs_do_read,
@@ -730,6 +952,18 @@ static const vfs_api_t g_vfs_api = {
     .unregister_filesystem = unregister_filesystem,
     .alloc_inode = api_alloc_inode,
     .alloc_dentry = api_alloc_dentry,
+    .getxattr = vfs_do_getxattr,
+    .setxattr = vfs_do_setxattr,
+    .listxattr = vfs_do_listxattr,
+    .removexattr = vfs_do_removexattr,
+    .flock = vfs_do_flock,
+    .fsnotify_add_watch = vfs_fsnotify_add_watch,
+    .fsnotify_rm_watch = vfs_fsnotify_rm_watch,
+    .fsnotify_read = (int (*)(int, void *, size_t))vfs_fsnotify_read,
+    .cached_read = api_cached_read,
+    .cached_write = api_cached_write,
+    .cache_invalidate = api_cache_invalidate,
+    .module_load_path = vfs_do_module_load_path,
 };
 
 static int vfs_drv_init(driver_t *drv, void *ctx)
@@ -740,6 +974,10 @@ static int vfs_drv_init(driver_t *drv, void *ctx)
     memset(g_mounts, 0, sizeof(g_mounts));
     g_fs_types = NULL;
     g_root_mnt = NULL;
+    vfs_dcache_init();
+    vfs_pcache_init();
+    vfs_flock_init();
+    vfs_fsnotify_init();
     vfs_api_register(&g_vfs_api);
     vga_print("vfs: core ready\n");
     return 0;

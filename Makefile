@@ -46,6 +46,7 @@ ARCH_C   := $(SRC)/arch/x86/idt.c \
 
 KERNEL_C := $(SRC)/kernel/main.c \
             $(SRC)/kernel/heap.c \
+            $(SRC)/kernel/mm.c \
             $(SRC)/kernel/process.c \
             $(SRC)/kernel/scheduler.c \
             $(SRC)/kernel/syscall.c \
@@ -81,7 +82,12 @@ OBJS     := $(ASM_OBJS) $(C_OBJS)
 # ---- loadable drivers (.kmod = relocatable ELF) ----
 # VFS/block stack first (initrd pack order below).
 BLOCK_SRCS := $(SRC)/drivers/block/block.c
-VFS_SRCS   := $(SRC)/drivers/vfs/vfs_core.c
+VFS_SRCS   := $(SRC)/drivers/vfs/vfs_core.c \
+              $(SRC)/drivers/vfs/vfs_dcache.c \
+              $(SRC)/drivers/vfs/vfs_pcache.c \
+              $(SRC)/drivers/vfs/vfs_xattr.c \
+              $(SRC)/drivers/vfs/vfs_flock.c \
+              $(SRC)/drivers/vfs/vfs_fsnotify.c
 PART_GPT_SRCS := $(SRC)/drivers/part/gpt/part_gpt.c
 PART_MBR_SRCS := $(SRC)/drivers/part/mbr/part_mbr.c
 RAMFS_SRCS := $(SRC)/drivers/fs/ramfs/ramfs.c

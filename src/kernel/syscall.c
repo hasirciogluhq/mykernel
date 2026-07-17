@@ -4,9 +4,12 @@
 #include <kernel/vfs.h>
 #include <kernel/vfs_api.h>
 #include <kernel/errno.h>
+#include <kernel/mm.h>
+#include <kernel/module.h>
 #include <kernel/mkdx_api.h>
 #include <kernel/uaccess.h>
 #include <kernel/string.h>
+#include <drivers/vfs_fs.h>
 #include <user/gx.h>
 
 typedef struct {
@@ -637,6 +640,167 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
     case SYS_GETCWD: return do_getcwd(a1, a2);
     case SYS_AIO_SUBMIT: return do_aio_submit(a1);
     case SYS_AIO_WAIT:   return do_aio_wait(a1);
+    case SYS_UNLINK: {
+        char kpath[256];
+        int len = user_strlen((const char *)a1, sizeof(kpath));
+        const vfs_api_t *api = vfs_api_get();
+        if (len < 0 || copy_from_user(kpath, (const void *)a1, (size_t)len + 1) < 0)
+            return -EFAULT;
+        if (!api || !api->unlink) return -ENOTSUP;
+        return api->unlink(kpath);
+    }
+    case SYS_RMDIR: {
+        char kpath[256];
+        int len = user_strlen((const char *)a1, sizeof(kpath));
+        const vfs_api_t *api = vfs_api_get();
+        if (len < 0 || copy_from_user(kpath, (const void *)a1, (size_t)len + 1) < 0)
+            return -EFAULT;
+        if (!api || !api->rmdir) return -ENOTSUP;
+        return api->rmdir(kpath);
+    }
+    case SYS_RENAME: {
+        char a[256], b[256];
+        int la, lb;
+        const vfs_api_t *api = vfs_api_get();
+        la = user_strlen((const char *)a1, sizeof(a));
+        lb = user_strlen((const char *)a2, sizeof(b));
+        if (la < 0 || lb < 0) return -EFAULT;
+        if (copy_from_user(a, (const void *)a1, (size_t)la + 1) < 0) return -EFAULT;
+        if (copy_from_user(b, (const void *)a2, (size_t)lb + 1) < 0) return -EFAULT;
+        if (!api || !api->rename) return -ENOTSUP;
+        return api->rename(a, b);
+    }
+    case SYS_MMAP: {
+        process_t *p = process_current();
+        int vfd = -1;
+        if (!p) return -EFAULT;
+        if ((int)a5 >= 0) {
+            vfd = process_lookup_fd(p, (int)a5);
+            if (vfd < 0) return -EBADF;
+        }
+        return mm_mmap(p, (uint32_t)a1, (size_t)a2, (int)a3, (int)a4, vfd, 0);
+    }
+    case SYS_MUNMAP:
+        return mm_munmap(process_current(), (uint32_t)a1, (size_t)a2);
+    case SYS_MSYNC:
+        return mm_msync(process_current(), (uint32_t)a1, (size_t)a2, (int)a3);
+    case SYS_FLOCK: {
+        process_t *p = process_current();
+        flock_t fl;
+        const vfs_api_t *api = vfs_api_get();
+        int vfd;
+        if (!p || !api || !api->flock) return -ENOTSUP;
+        vfd = process_lookup_fd(p, (int)a1);
+        if (vfd < 0) return -EBADF;
+        if (a3) {
+            if (copy_from_user(&fl, (const void *)a3, sizeof(fl)) < 0)
+                return -EFAULT;
+        } else {
+            memset(&fl, 0, sizeof(fl));
+            fl.l_type = (int16_t)a2;
+        }
+        fl.l_pid = p->pid;
+        return api->flock(vfd, (int)a2, &fl);
+    }
+    case SYS_GETXATTR: {
+        char path[256], name[64];
+        int lp, ln;
+        const vfs_api_t *api = vfs_api_get();
+        if (!api || !api->getxattr) return -ENOTSUP;
+        lp = user_strlen((const char *)a1, sizeof(path));
+        ln = user_strlen((const char *)a2, sizeof(name));
+        if (lp < 0 || ln < 0) return -EFAULT;
+        if (copy_from_user(path, (const void *)a1, (size_t)lp + 1) < 0) return -EFAULT;
+        if (copy_from_user(name, (const void *)a2, (size_t)ln + 1) < 0) return -EFAULT;
+        {
+            char tmp[256];
+            int n = api->getxattr(path, name, tmp, sizeof(tmp));
+            if (n < 0) return n;
+            if (a3 && a4) {
+                size_t c = (size_t)n < (size_t)a4 ? (size_t)n : (size_t)a4;
+                if (copy_to_user((void *)a3, tmp, c) < 0) return -EFAULT;
+            }
+            return n;
+        }
+    }
+    case SYS_SETXATTR: {
+        char path[256], name[64], val[256];
+        int lp, ln;
+        const vfs_api_t *api = vfs_api_get();
+        if (!api || !api->setxattr) return -ENOTSUP;
+        lp = user_strlen((const char *)a1, sizeof(path));
+        ln = user_strlen((const char *)a2, sizeof(name));
+        if (lp < 0 || ln < 0) return -EFAULT;
+        if (copy_from_user(path, (const void *)a1, (size_t)lp + 1) < 0) return -EFAULT;
+        if (copy_from_user(name, (const void *)a2, (size_t)ln + 1) < 0) return -EFAULT;
+        if (a4 > (long)sizeof(val)) return -EINVAL;
+        if (a4 && copy_from_user(val, (const void *)a3, (size_t)a4) < 0) return -EFAULT;
+        return api->setxattr(path, name, val, (size_t)a4, (int)a5);
+    }
+    case SYS_LISTXATTR: {
+        char path[256], list[512];
+        int lp, n;
+        const vfs_api_t *api = vfs_api_get();
+        if (!api || !api->listxattr) return -ENOTSUP;
+        lp = user_strlen((const char *)a1, sizeof(path));
+        if (lp < 0 || copy_from_user(path, (const void *)a1, (size_t)lp + 1) < 0)
+            return -EFAULT;
+        n = api->listxattr(path, list, sizeof(list));
+        if (n < 0) return n;
+        if (a2 && a3) {
+            size_t c = (size_t)n < (size_t)a3 ? (size_t)n : (size_t)a3;
+            if (copy_to_user((void *)a2, list, c) < 0) return -EFAULT;
+        }
+        return n;
+    }
+    case SYS_REMOVEXATTR: {
+        char path[256], name[64];
+        int lp, ln;
+        const vfs_api_t *api = vfs_api_get();
+        if (!api || !api->removexattr) return -ENOTSUP;
+        lp = user_strlen((const char *)a1, sizeof(path));
+        ln = user_strlen((const char *)a2, sizeof(name));
+        if (lp < 0 || ln < 0) return -EFAULT;
+        if (copy_from_user(path, (const void *)a1, (size_t)lp + 1) < 0) return -EFAULT;
+        if (copy_from_user(name, (const void *)a2, (size_t)ln + 1) < 0) return -EFAULT;
+        return api->removexattr(path, name);
+    }
+    case SYS_FSNOTIFY_ADD: {
+        char path[256];
+        int lp;
+        const vfs_api_t *api = vfs_api_get();
+        if (!api || !api->fsnotify_add_watch) return -ENOTSUP;
+        lp = user_strlen((const char *)a1, sizeof(path));
+        if (lp < 0 || copy_from_user(path, (const void *)a1, (size_t)lp + 1) < 0)
+            return -EFAULT;
+        return api->fsnotify_add_watch(path, (uint32_t)a2);
+    }
+    case SYS_FSNOTIFY_RM: {
+        const vfs_api_t *api = vfs_api_get();
+        if (!api || !api->fsnotify_rm_watch) return -ENOTSUP;
+        return api->fsnotify_rm_watch((int)a1);
+    }
+    case SYS_FSNOTIFY_READ: {
+        fsnotify_event_t ev[16];
+        const vfs_api_t *api = vfs_api_get();
+        int n;
+        size_t max;
+        if (!api || !api->fsnotify_read) return -ENOTSUP;
+        max = (size_t)a3;
+        if (max > 16) max = 16;
+        n = api->fsnotify_read((int)a1, ev, max);
+        if (n < 0) return n;
+        if (n && copy_to_user((void *)a2, ev, (size_t)n * sizeof(ev[0])) < 0)
+            return -EFAULT;
+        return n;
+    }
+    case SYS_MODULE_LOAD: {
+        char path[256];
+        int lp = user_strlen((const char *)a1, sizeof(path));
+        if (lp < 0 || copy_from_user(path, (const void *)a1, (size_t)lp + 1) < 0)
+            return -EFAULT;
+        return module_load_path(path);
+    }
     case SYS_GETPID: return do_getpid();
     case SYS_YIELD:  return do_yield();
     case SYS_FORK:   return -1;

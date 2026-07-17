@@ -22,9 +22,24 @@
 #define SYS_GETCWD   183
 #define SYS_YIELD    158   /* sched_yield */
 
-/* Private async I/O */
-#define SYS_AIO_SUBMIT 220
-#define SYS_AIO_WAIT   221
+/* Private async I/O + VFS extras */
+#define SYS_AIO_SUBMIT   220
+#define SYS_AIO_WAIT     221
+#define SYS_MMAP         222
+#define SYS_MUNMAP       223
+#define SYS_MSYNC        224
+#define SYS_FLOCK        225
+#define SYS_GETXATTR     226
+#define SYS_SETXATTR     227
+#define SYS_LISTXATTR    228
+#define SYS_REMOVEXATTR  229
+#define SYS_FSNOTIFY_ADD 230
+#define SYS_FSNOTIFY_RM  231
+#define SYS_FSNOTIFY_READ 232
+#define SYS_MODULE_LOAD  233
+#define SYS_UNLINK       10
+#define SYS_RMDIR        40
+#define SYS_RENAME       38
 
 /* Graphics / window syscalls (mykernel private range) */
 #define SYS_GX_INFO          200

@@ -50,8 +50,11 @@ long mm_mmap(process_t *p, uint32_t addr, size_t len, int prot, int flags,
     memset(pages, 0, npages * PAGE_SIZE);
 
     if (vfs_fd >= 0) {
-        off_t pos = off;
         size_t got = 0;
+        if (vfs_lseek(vfs_fd, off, SEEK_SET) < 0) {
+            mm_free_pages(pages, npages);
+            return -EINVAL;
+        }
         while (got < len) {
             ssize_t n = vfs_read(vfs_fd, (uint8_t *)pages + got, len - got);
             if (n < 0) {
@@ -61,10 +64,6 @@ long mm_mmap(process_t *p, uint32_t addr, size_t len, int prot, int flags,
             if (n == 0)
                 break;
             got += (size_t)n;
-            pos += n;
-            (void)pos;
-            if (vfs_lseek(vfs_fd, off + (off_t)got, SEEK_SET) < 0)
-                break;
         }
     }
 

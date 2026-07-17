@@ -4,6 +4,7 @@
 #include <kernel/string.h>
 #include <kernel/initrd.h>
 #include <kernel/initrd_store.h>
+#include <kernel/vfs_api.h>
 #include <drivers/vga.h>
 
 #define EI_NIDENT 16
@@ -318,6 +319,14 @@ static const char *basename_of(const char *path)
     return p;
 }
 
+int module_load_path(const char *path)
+{
+    const vfs_api_t *api = vfs_api_get();
+    if (!api || !api->module_load_path)
+        return -1;
+    return api->module_load_path(path);
+}
+
 int modules_load_initrd(const void *data, size_t size)
 {
     const initrd_header_t *hdr;
@@ -326,6 +335,8 @@ int modules_load_initrd(const void *data, size_t size)
 
     if (!data || size < sizeof(uint32_t) * 2)
         return -1;
+
+    initrd_store_set(data, size);
 
     hdr = (const initrd_header_t *)data;
     if (hdr->magic != INITRD_MAGIC || hdr->count == 0 ||

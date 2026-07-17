@@ -4,6 +4,7 @@
 #include <drivers/pci.h>
 #include <drivers/display.h>
 #include <kernel/heap.h>
+#include <kernel/mm.h>
 #include <kernel/syscall.h>
 #include <kernel/vfs.h>
 #include <kernel/ksym.h>
@@ -36,6 +37,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     }
 
     heap_init((void *)(uintptr_t)HEAP_PHYS, HEAP_SIZE);
+    mm_init();
     gdt_init();
     idt_init();
     syscall_init();

@@ -67,7 +67,11 @@ static const ksym_t g_ksyms[] = {
     { "block_api_register", (void *)block_api_register },
     { "block_api_get",      (void *)block_api_get },
     { "initrd_store_get",   (void *)initrd_store_get },
+    { "initrd_store_set",   (void *)initrd_store_set },
     { "process_current",    (void *)process_current },
+    { "modules_load_blob",  (void *)modules_load_blob },
+    { "module_load_path",   (void *)module_load_path },
+    { "module_find",        (void *)module_find },
 
     { "console_read",       (void *)console_read },
     { "console_write",      (void *)console_write },
