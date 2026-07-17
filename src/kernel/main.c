@@ -15,8 +15,14 @@
 #include <arch/x86/gdt.h>
 #include <arch/x86/idt.h>
 
-#define HEAP_SIZE (20u * 1024u * 1024u)
-static uint8_t heap_area[HEAP_SIZE] __attribute__((aligned(16)));
+/*
+ * Do NOT put a huge static heap in .bss. Multiboot loaders may place the
+ * initrd inside the kernel's BSS span (filesz..memsz) and then zero BSS,
+ * wiping the module image. Use a fixed high physical region instead
+ * (below .mke load addresses at 0x02000000+).
+ */
+#define HEAP_PHYS 0x01000000u
+#define HEAP_SIZE (8u * 1024u * 1024u)
 
 void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 {
@@ -28,7 +34,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
             __asm__ volatile("hlt");
     }
 
-    heap_init(heap_area, HEAP_SIZE);
+    heap_init((void *)(uintptr_t)HEAP_PHYS, HEAP_SIZE);
     gdt_init();
     idt_init();
     syscall_init();

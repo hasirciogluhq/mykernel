@@ -321,45 +321,48 @@ int modules_load_initrd(const void *data, size_t size)
 {
     const initrd_header_t *hdr;
     uint32_t i;
-    size_t min_hdr;
+    size_t table_bytes;
 
-    if (!data)
-        return -1;
-
-    min_hdr = sizeof(uint32_t) * 2 + sizeof(initrd_file_t);
-    if (size < min_hdr)
+    if (!data || size < sizeof(uint32_t) * 2)
         return -1;
 
     hdr = (const initrd_header_t *)data;
     if (hdr->magic != INITRD_MAGIC || hdr->count == 0 ||
-        hdr->count > INITRD_MAX_FILES)
+        hdr->count > INITRD_MAX_FILES) {
         return -1;
+    }
 
-    min_hdr = sizeof(uint32_t) * 2 + (size_t)hdr->count * sizeof(initrd_file_t);
-    if (size < min_hdr)
+    table_bytes = sizeof(uint32_t) * 2 + (size_t)hdr->count * sizeof(initrd_file_t);
+    if (size < table_bytes)
         return -1;
 
     for (i = 0; i < hdr->count; i++) {
         const initrd_file_t *f = &hdr->files[i];
         const uint8_t *blob;
-        const uint32_t *magic;
+        uint32_t magic;
 
-        if (f->offset < min_hdr || f->offset + f->size > size || f->size == 0)
+        if (f->size == 0 || f->offset + f->size > size)
             return -1;
         blob = (const uint8_t *)data + f->offset;
 
         /* .mke apps are spawned later by mke_spawn_from_* */
         if (f->size >= 4) {
-            magic = (const uint32_t *)blob;
-            if (*magic == 0x31454B4Du) /* MKE1 */
+            magic = blob[0] | ((uint32_t)blob[1] << 8) |
+                    ((uint32_t)blob[2] << 16) | ((uint32_t)blob[3] << 24);
+            if (magic == 0x31454B4Du) /* MKE1 */
                 continue;
         }
 
         vga_print("load ");
         vga_print(f->name);
         vga_print("\n");
-        if (modules_load_blob(f->name, blob, f->size) < 0)
-            return -1;
+        if (modules_load_blob(f->name, blob, f->size) < 0) {
+            /* Soft-fail one kmod so BGA/MKDX can still boot without virtio. */
+            vga_print("kmod load skipped: ");
+            vga_print(f->name);
+            vga_print("\n");
+            continue;
+        }
     }
     return 0;
 }
@@ -382,30 +385,14 @@ int modules_load_from_mbi(multiboot_info_t *mbi)
                               ? (const char *)(uintptr_t)mods[i].cmdline
                               : NULL;
         const initrd_header_t *hdr;
-        void *copy;
 
         if (sz < 4)
             return -1;
 
-        /*
-         * Copy out of the Multiboot module region first. QEMU may place the
-         * initrd near kernel BSS/heap; loading kmods allocates from the heap
-         * and must not risk clobbering the module image mid-parse.
-         */
-        copy = kmalloc(sz);
-        if (!copy) {
-            vga_print("initrd: oom\n");
-            return -1;
-        }
-        memcpy(copy, start, sz);
-
-        hdr = (const initrd_header_t *)copy;
+        hdr = (const initrd_header_t *)start;
         if (hdr->magic == INITRD_MAGIC) {
-            if (modules_load_initrd(copy, sz) < 0) {
-                kfree(copy);
+            if (modules_load_initrd(start, sz) < 0)
                 return -1;
-            }
-            kfree(copy);
             continue;
         }
 
@@ -413,11 +400,8 @@ int modules_load_from_mbi(multiboot_info_t *mbi)
         vga_print("load ");
         vga_print(basename_of(cmd));
         vga_print("\n");
-        if (modules_load_blob(basename_of(cmd), copy, sz) < 0) {
-            kfree(copy);
+        if (modules_load_blob(basename_of(cmd), start, sz) < 0)
             return -1;
-        }
-        kfree(copy);
     }
     return 0;
 }

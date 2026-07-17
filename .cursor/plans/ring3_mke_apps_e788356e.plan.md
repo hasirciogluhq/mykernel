@@ -10,13 +10,13 @@ todos:
     status: completed
   - id: mke-loader
     content: "src/kernel/mke.c: validate, load_addr copy, BSS, process_create_user; initrd routing"
-    status: in_progress
+    status: completed
   - id: ring3-fix
     content: isr_syscall user DS restore; main process_init/scheduler_start; copy_from/to_user for ugx
-    status: pending
+    status: completed
   - id: app-split
     content: Her app kendi mke_main loop; dock için SYS_WM_FIND; kernel header bağımlılığını kaldır
-    status: pending
+    status: completed
   - id: persist-plan
     content: Plan .cursor/plans altında kalıcı (bu dosya)
     status: completed

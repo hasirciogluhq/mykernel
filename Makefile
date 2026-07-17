@@ -72,7 +72,8 @@ OBJS     := $(ASM_OBJS) $(C_OBJS)
 
 # ---- loadable drivers (.kmod = relocatable ELF) ----
 BGA_SRCS := $(SRC)/drivers/display/bga/bga.c
-VIRTIO_SRCS := $(SRC)/drivers/display/virtio_gpu/virtio_gpu.c
+VIRTIO_SRCS := $(SRC)/drivers/display/virtio_gpu/virtio_gpu.c \
+               $(SRC)/drivers/display/virtio_gpu/virtio_pci.c
 MKDX_SRCS := $(SRC)/drivers/mkdx/surface.c \
              $(SRC)/drivers/mkdx/draw.c \
              $(SRC)/drivers/mkdx/blur.c \
