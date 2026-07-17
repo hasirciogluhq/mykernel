@@ -287,10 +287,13 @@ static void *alloc_aligned_locked(size_t size, size_t align)
 
     size = align_up_sz(size, 16u);
     /*
-     * Worst case: HEAP_HDR_SIZE bytes before the aligned user pointer, plus
-     * up to (align-1) bytes of lead padding inside the region.
+     * Worst case: HDR before the aligned user pointer, up to (align-1) bytes of
+     * lead padding, plus HEAP_MIN_BLOCK slack so we can skip a sub-minimum lead
+     * and still fit the next alignment slot.
      */
     if (!size_add_ok(HEAP_HDR_SIZE + size, align, &need))
+        return NULL;
+    if (!size_add_ok(need, HEAP_MIN_BLOCK, &need))
         return NULL;
     need = align_up_sz(need, 16u);
 
