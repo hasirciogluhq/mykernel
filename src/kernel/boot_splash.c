@@ -18,7 +18,7 @@
 #define SPLASH_GLOW   0xFFD1D1D6u
 
 #define RING_R        34
-#define RING_THICK    6
+#define RING_THICK    10
 #define TIP_R         (RING_THICK / 2)
 #define INNER_R       (RING_R - TIP_R)
 #define OUTER_R       (RING_R + TIP_R)
@@ -30,8 +30,8 @@
 #define MIN_ARC_ANG   (ANGLE_FULL / 200)
 
 #define SPLASH_FRAMES 90
-#define FILL_CYCLE    48          /* frames for one 0→100→0 leg */
-#define ROT_PER_FRAME 3           /* legacy step count per frame */
+#define FILL_CYCLE    62          /* frames for one 0→100→0 leg */
+#define ROT_PER_FRAME 2           /* legacy step count per frame */
 #define ROT_SPEED     ((ROT_PER_FRAME * ANGLE_FULL) / 64)
 
 static int clampi(int v, int lo, int hi)
@@ -368,7 +368,7 @@ static void draw_ring(uint32_t *fb, uint32_t stride, uint32_t w, uint32_t h,
 
 static void splash_delay(void)
 {
-    volatile uint32_t n = 160000u;
+    volatile uint32_t n = 208000u;
 
     while (n--)
         __asm__ volatile("pause");
