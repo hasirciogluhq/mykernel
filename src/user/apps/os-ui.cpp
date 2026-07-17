@@ -703,7 +703,8 @@ void paint_menubar()
     s.text(bat_x + bat_w + 4, text_y, pct_txt, bat_tint, 1);
     s.text(clock_x, text_y, g_clock_text, clock_tint, 1);
 
-    g_menubar.damage();
+    /* Full menubar width is acrylic — prefer band damage over full-screen escalate. */
+    g_menubar.damage(0, 0, g_sw, kMenubarH);
 }
 
 int slot_local_x(int index)
@@ -769,7 +770,8 @@ void paint_dock()
         }
     }
 
-    g_dock.damage();
+    /* Dock surface is tall (mag pad); damage painted tray + mag headroom only. */
+    g_dock.damage(tray0, 0, g_tray_w, kDockH);
 }
 
 /* True if pointer is inside the painted tray; writes dock-local coords. */
@@ -1122,12 +1124,9 @@ extern "C" void mke_main(void)
                 g_status_hover = status_hover;
                 dirty_menu = true;
             }
-            /* Mag is continuous on cursor X — dirty whenever pointer moves in tray. */
-            if (hover != g_hover || mag_x != g_mag_cursor_x) {
-                g_hover = hover;
-                g_mag_cursor_x = mag_x;
-                dirty_dock = true;
-            }
+            /* Mag targets track cursor; paint only when mag/bounce actually moves. */
+            g_mag_cursor_x = mag_x;
+            g_hover = hover;
 
             const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_buttons);
             if (pressed & UGX_BTN_LEFT) {
@@ -1168,6 +1167,7 @@ extern "C" void mke_main(void)
         if (did_work)
             (void)hsrc::sdk::present();
 
-        hsrc::sdk::yield(did_work ? 0u : 4u);
+        /* Never busy-spin on mag frames — keep cursor/WM path schedulable. */
+        hsrc::sdk::yield(did_work ? 1u : 4u);
     }
 }

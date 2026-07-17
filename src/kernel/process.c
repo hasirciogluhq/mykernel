@@ -8,8 +8,11 @@
 #include <kernel/syscall.h>
 #include <kernel/vfs.h>
 #include <kernel/mkdx_api.h>
+#include <kernel/smp.h>
 #include <drivers/serial.h>
 #include <arch/x86/gdt.h>
+#include <arch/x86/cpu.h>
+#include <arch/x86/lapic.h>
 
 /* Slot table is pointers only — process_t + stacks come from heap / freelist. */
 static process_t *g_procs[PROC_MAX];
@@ -17,7 +20,6 @@ static process_t *g_proc_freelist;
 /* Exited (ppid==0) procs wait here until schedule() runs on another stack. */
 static process_t *g_exit_graveyard;
 static pid_t      next_pid = 1;
-static process_t *current;
 
 /* Identity-mapped snapshot for userspace (see SYS_PROC_MAP). */
 static proc_page_t g_proc_page;
@@ -188,13 +190,17 @@ static void process_release_fds(process_t *p)
 
 static void process_trampoline(void (*entry)(void))
 {
+    scheduler_unlock_new_thread();
     entry();
     process_exit(0);
 }
 
 static void user_trampoline(void (*entry)(void))
 {
-    process_t *p = process_current();
+    process_t *p;
+
+    scheduler_unlock_new_thread();
+    p = process_current();
     /* Authoritative entry — stack arg can be stale after context_switch. */
     if (p && p->user_entry)
         entry = p->user_entry;
@@ -264,27 +270,33 @@ static process_t *alloc_process(const char *name)
     p->ustack_base = ubase;
     p->slot = idx;
     p->pid = next_pid++;
-    p->ppid = current ? current->pid : 0;
-    p->state = PROC_READY;
-    strncpy(p->name, name, PROC_NAME_MAX - 1);
-    p->kstack_top = (uint32_t)((uint8_t *)kbase + PROC_KSTACK_SIZE);
-    p->ustack_top = (uint32_t)((uint8_t *)ubase + PROC_USTACK_SIZE);
-    p->start_ticks = scheduler_tick_count();
-    for (int f = 0; f < VFS_MAX_FD; f++)
-        p->fds[f] = -1;
+    {
+        process_t *cur = process_current();
+        p->ppid = cur ? cur->pid : 0;
+        p->state = PROC_READY;
+        p->cpu = -1;
+        p->cpu_affinity = -1;
+        p->kill_pending = 0;
+        strncpy(p->name, name, PROC_NAME_MAX - 1);
+        p->kstack_top = (uint32_t)((uint8_t *)kbase + PROC_KSTACK_SIZE);
+        p->ustack_top = (uint32_t)((uint8_t *)ubase + PROC_USTACK_SIZE);
+        p->start_ticks = scheduler_tick_count();
+        for (int f = 0; f < VFS_MAX_FD; f++)
+            p->fds[f] = -1;
 
-    if (current) {
-        p->uid = current->uid;
-        p->euid = current->euid;
-        strncpy(p->cwd, current->cwd, sizeof(p->cwd) - 1);
-    } else {
-        /* Default credentials: root. Shell / desktop spawn with full rights. */
-        p->uid = 0;
-        p->euid = 0;
-        strcpy(p->cwd, "/");
+        if (cur) {
+            p->uid = cur->uid;
+            p->euid = cur->euid;
+            strncpy(p->cwd, cur->cwd, sizeof(p->cwd) - 1);
+        } else {
+            /* Default credentials: root. Shell / desktop spawn with full rights. */
+            p->uid = 0;
+            p->euid = 0;
+            strcpy(p->cwd, "/");
+        }
+
+        env_inherit(p, cur);
     }
-
-    env_inherit(p, current);
 
     int cfd = vfs_open("/dev/console", O_RDWR);
     if (cfd >= 0) {
@@ -323,7 +335,6 @@ void process_init(void)
     memset(g_procs, 0, sizeof(g_procs));
     g_proc_freelist = NULL;
     g_exit_graveyard = NULL;
-    current = NULL;
     memset(&g_proc_page, 0, sizeof(g_proc_page));
     g_proc_page.magic = PROC_PAGE_MAGIC;
     g_proc_page.seq = 0;
@@ -333,7 +344,7 @@ void process_init(void)
 
 void process_reap_graveyard(void)
 {
-    process_t *cur = current;
+    process_t *cur = process_current();
     process_t **pp = &g_exit_graveyard;
 
     while (*pp) {
@@ -442,8 +453,19 @@ void process_snapshot_publish(void)
     g_proc_page_last_tick = now;
 }
 
-process_t *process_current(void) { return current; }
-void process_set_current(process_t *p) { current = p; }
+process_t *process_current(void)
+{
+    return cpu_current()->current;
+}
+
+void process_set_current(process_t *p)
+{
+    cpu_t *c = cpu_current();
+    c->current = p;
+    if (p)
+        p->cpu = c->id;
+}
+
 process_t **process_table(void) { return g_procs; }
 
 process_t *process_get(pid_t pid)
@@ -474,28 +496,35 @@ pid_t process_create_user(const char *name, void (*entry)(void))
         return -1;
     p->is_user = 1;
     p->user_entry = entry;
+    /*
+     * PIC + mkdx/PS2 poll paths are BSP-only for now. Migrating a GUI app to
+     * an AP races the timer's drivers_poll() and corrupts kernel state (#UD).
+     */
+    p->cpu_affinity = 0;
     setup_kstack(p, user_trampoline, entry);
     return p->pid;
 }
 
 pid_t process_getppid(void)
 {
-    return current ? current->ppid : 0;
+    process_t *cur = process_current();
+    return cur ? cur->ppid : 0;
 }
 
 pid_t process_waitpid(pid_t pid, int *status_out, int options)
 {
     int found_child = 0;
+    process_t *cur = process_current();
     (void)options;
 
-    if (!current)
+    if (!cur)
         return -ESRCH;
 
     for (int i = 0; i < PROC_MAX; i++) {
         process_t *p = g_procs[i];
         pid_t child_pid;
 
-        if (!p || p->state == PROC_UNUSED || p->ppid != current->pid)
+        if (!p || p->state == PROC_UNUSED || p->ppid != cur->pid)
             continue;
         if (pid > 0 && p->pid != pid)
             continue;
@@ -520,31 +549,36 @@ pid_t process_waitpid(pid_t pid, int *status_out, int options)
 void process_exit(int code)
 {
     pid_t pid;
-    if (!current)
+    process_t *cur = process_current();
+
+    if (!cur)
         return;
-    pid = current->pid;
-    process_release_fds(current);
+    pid = cur->pid;
+    process_release_fds(cur);
     process_free_windows(pid);
     process_free_console(pid);
-    current->exit_code = code;
-    if (current->ppid == 0) {
+    cur->exit_code = code;
+    cur->kill_pending = 0;
+    if (cur->ppid == 0) {
         /*
          * Detach from the table but keep struct/stack alive until
          * process_reap_graveyard() runs on another process's stack.
          */
-        int slot = current->slot;
-        if (slot >= 0 && slot < PROC_MAX && g_procs[slot] == current)
+        int slot = cur->slot;
+        if (slot >= 0 && slot < PROC_MAX && g_procs[slot] == cur)
             g_procs[slot] = NULL;
-        current->state = PROC_UNUSED;
-        current->slot = -1;
-        current->free_next = g_exit_graveyard;
-        g_exit_graveyard = current;
+        cur->state = PROC_UNUSED;
+        cur->slot = -1;
+        cur->cpu = -1;
+        cur->free_next = g_exit_graveyard;
+        g_exit_graveyard = cur;
     } else {
-        current->state = PROC_ZOMBIE;
+        cur->state = PROC_ZOMBIE;
+        cur->cpu = -1;
     }
     process_snapshot_mark_dirty();
     process_snapshot_publish();
-    scheduler_on_exit(current);
+    scheduler_on_exit(cur);
     schedule();
     for (;;)
         __asm__ volatile("hlt");
@@ -553,12 +587,23 @@ void process_exit(int code)
 int process_kill(pid_t pid)
 {
     process_t *p = process_get(pid);
+    process_t *cur = process_current();
+
     if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
         return -ESRCH;
     if (!p->is_user)
         return -EPERM; /* kernel threads only exit themselves */
-    if (p == current)
+    if (p == cur)
         process_exit(137);
+    /* Running on another CPU — ask it to exit at next schedule point. */
+    if (p->state == PROC_RUNNING && p->cpu >= 0 && p->cpu != cpu_id()) {
+        cpu_t *remote = cpu_get(p->cpu);
+        p->kill_pending = 1;
+        if (remote)
+            lapic_send_ipi(remote->apic_id, LAPIC_IPI_VECTOR);
+        smp_reschedule_others();
+        return 0;
+    }
     process_release_fds(p);
     process_free_windows(p->pid);
     process_free_console(p->pid);

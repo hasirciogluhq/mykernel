@@ -19,6 +19,7 @@
 #include <drivers/serial.h>
 #include <drivers/driver.h>
 #include <drivers/vfs_fs.h>
+#include <arch/x86/cpu.h>
 #include <user/gx.h>
 
 typedef struct {
@@ -397,10 +398,13 @@ static long do_yield(long sleep_ticks)
     const mkdx_api_t *api = mkdx_api_get();
     process_t *p = process_current();
 
-    /* Cooperative scheduler: drain input every yield so PS/2 isn't starved. */
-    drivers_poll();
-    if (api && api->pump_input)
-        api->pump_input();
+    /* Cooperative scheduler: drain input every yield so PS/2 isn't starved.
+     * Poll/mkdx are BSP-only (see drivers_poll). */
+    if (cpu_id() == 0) {
+        drivers_poll();
+        if (api && api->pump_input)
+            api->pump_input();
+    }
 
     if (p && sleep_ticks > 0) {
         uint64_t now = scheduler_tick_count();
@@ -1085,6 +1089,29 @@ static long do_gx_damage(long win_id)
     return 0;
 }
 
+static long do_gx_damage_rect(long win_id, long rectp)
+{
+    ugx_damage_args r;
+    const mkdx_api_t *api = mkdx();
+    if (!api)
+        return -1;
+    if (!rectp)
+        return -1;
+    if (copy_from_user(&r, (const void *)rectp, sizeof(r)) < 0)
+        return -1;
+    if (r.w <= 0 || r.h <= 0)
+        return 0;
+    if (api->mark_dirty_rect) {
+        api->mark_dirty_rect((int)win_id, r.x, r.y, r.w, r.h);
+        return 0;
+    }
+    /* Fallback: full window damage */
+    if (!api->mark_dirty)
+        return -1;
+    api->mark_dirty((int)win_id);
+    return 0;
+}
+
 static long do_wm_get_frame(long id, long outp)
 {
     ugx_frame fr;
@@ -1305,6 +1332,12 @@ static long do_shutdown(long fd, long how)
 
 long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
 {
+    process_t *cur = process_current();
+    if (cur && cur->kill_pending && n != SYS_EXIT) {
+        process_exit(137);
+        return 0;
+    }
+
     switch (n) {
     case SYS_EXIT:   return do_exit(a1);
     case SYS_READ:   return do_read(a1, a2, a3);
@@ -1697,6 +1730,7 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
     case SYS_INPUT_STATE:      return do_input_state(a1);
     case SYS_WM_POP_KEY:       return do_wm_pop_key(a1);
     case SYS_GX_DAMAGE:        return do_gx_damage(a1);
+    case SYS_GX_DAMAGE_RECT:   return do_gx_damage_rect(a1, a2);
     case SYS_WM_GET_FRAME:     return do_wm_get_frame(a1, a2);
     case SYS_WM_FIND:          return do_wm_find(a1);
     case SYS_WM_FIND_CLASS:    return do_wm_find_class(a1);

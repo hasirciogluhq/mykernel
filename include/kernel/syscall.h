@@ -62,6 +62,7 @@
 #define SYS_INPUT_STATE      212
 #define SYS_WM_POP_KEY       213
 #define SYS_GX_DAMAGE        214
+#define SYS_GX_DAMAGE_RECT   278  /* a1=win a2=&ugx_damage_args (window-local) */
 #define SYS_WM_GET_FRAME     215
 #define SYS_WM_FIND          216
 #define SYS_WM_SET           217

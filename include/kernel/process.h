@@ -62,6 +62,9 @@ typedef struct process {
     char         name[PROC_NAME_MAX];
     int          is_user;      /* 1 = ring-3 userspace */
     int          is_idle;      /* 1 = kernel idle thread (HLT when scheduled) */
+    int          cpu;          /* CPU currently running this process (-1 if none) */
+    int          cpu_affinity; /* -1 = any CPU; else only that cpu id */
+    int          kill_pending; /* remote kill request observed at schedule() */
     uid_t        uid;          /* real uid — default 0 (root) */
     uid_t        euid;         /* effective uid — default 0 (root) */
     char         cwd[VFS_PATH_MAX];

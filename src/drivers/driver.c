@@ -1,4 +1,5 @@
 #include <drivers/driver.h>
+#include <arch/x86/cpu.h>
 #include <kernel/string.h>
 
 static driver_slot_t g_slots[DRIVER_MAX];
@@ -175,6 +176,10 @@ int drivers_load_all(void *ctx)
 
 void drivers_poll(void)
 {
+    /* Pollable drivers (PS/2, mkdx, …) are not SMP-safe — BSP only. */
+    if (cpu_id() != 0)
+        return;
+
     for (size_t i = 0; i < DRIVER_MAX; i++) {
         if (!g_slots[i].used)
             continue;

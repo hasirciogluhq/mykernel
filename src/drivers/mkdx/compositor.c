@@ -566,16 +566,34 @@ void gx_compositor_compose_rect(gx_compositor *c, gx_surface *dst, gx_rect clip)
     /*
      * Occlusion (P13): if a sharp opaque layer fully covers the clip, skip
      * wallpaper and everything below it — still correct for partial damage.
+     * Rounded windows: use the axis-aligned inset (exclude corner radii) so
+     * hover/content damage under opaque clients does not repaint wallpaper.
      */
     for (i = n - 1; i >= 0; i--) {
         gx_layer *L = &c->layers[ids[i]];
-        if (L->style != GX_LAYER_OPAQUE || L->corner_radius > 0)
+        int32_t ox, oy, ow, oh;
+        int r;
+
+        if (L->style != GX_LAYER_OPAQUE)
             continue;
         if (L->opacity && L->opacity < 255)
             continue;
-        if (L->bounds.x <= clip.x && L->bounds.y <= clip.y &&
-            L->bounds.x + L->bounds.w >= clip.x + clip.w &&
-            L->bounds.y + L->bounds.h >= clip.y + clip.h) {
+        ox = L->bounds.x;
+        oy = L->bounds.y;
+        ow = L->bounds.w;
+        oh = L->bounds.h;
+        r = L->corner_radius;
+        if (r > 0) {
+            if (ow <= 2 * r || oh <= 2 * r)
+                continue;
+            ox += r;
+            oy += r;
+            ow -= 2 * r;
+            oh -= 2 * r;
+        }
+        if (ox <= clip.x && oy <= clip.y &&
+            ox + ow >= clip.x + clip.w &&
+            oy + oh >= clip.y + clip.h) {
             start = i;
             break;
         }

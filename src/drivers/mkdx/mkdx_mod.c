@@ -213,6 +213,30 @@ static void api_mark_dirty(int win_id)
     gx_server_mark_dirty();
 }
 
+static void api_mark_dirty_rect(int win_id, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    gx_server *s = gx_server_get();
+    wm_window *win;
+    gx_rect r;
+
+    if (!s || w <= 0 || h <= 0)
+        return;
+    if (win_id <= 0) {
+        gx_server_mark_dirty_rect(gx_rect_make(x, y, w, h));
+        return;
+    }
+    win = wm_get(&s->wm, win_id);
+    if (!win) {
+        gx_server_mark_dirty();
+        return;
+    }
+    /* Window-local → screen space; clamp to frame. */
+    r = gx_rect_make(win->frame.x + x, win->frame.y + y, w, h);
+    r = gx_rect_intersect(r, win->frame);
+    if (!gx_rect_empty(r))
+        gx_server_mark_dirty_rect(r);
+}
+
 static long api_wm_create(const void *args, uint32_t owner_pid)
 {
     const ugx_window_opts *a = (const ugx_window_opts *)args;
@@ -488,6 +512,7 @@ static const mkdx_api_t g_api = {
     .info = api_info,
     .present = api_present,
     .mark_dirty = api_mark_dirty,
+    .mark_dirty_rect = api_mark_dirty_rect,
     .wm_create = api_wm_create,
     .wm_set = api_wm_set,
     .wm_get = api_wm_get,

@@ -55,6 +55,11 @@ void idt_set_irq_gate(uint8_t vector, uint32_t handler)
     idt_set_gate(vector, handler, GDT_KERNEL_CODE, 0x8E);
 }
 
+void idt_load(void)
+{
+    __asm__ volatile("lidt %0" : : "m"(idtp));
+}
+
 void idt_init(void)
 {
     int i;
@@ -72,5 +77,5 @@ void idt_init(void)
     /* 0xEE = present | DPL3 | 32-bit interrupt gate (userspace int 0x80) */
     idt_set_gate(0x80, (uint32_t)isr_syscall, GDT_KERNEL_CODE, 0xEE);
 
-    __asm__ volatile("lidt %0" : : "m"(idtp));
+    idt_load();
 }

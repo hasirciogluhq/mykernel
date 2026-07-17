@@ -180,6 +180,8 @@ public:
     /* Close → close()+exit(0); green escalates maximize→fullscreen. Never returns on Close. */
     bool handle_chrome_hit(ChromeHit hit);
     void damage();
+    /* Window-local partial damage (compose only this rect). */
+    void damage(int x, int y, int w, int h);
 
 private:
     bool remap_surface();

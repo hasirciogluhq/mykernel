@@ -22,8 +22,10 @@
 #include <arch/x86/irq.h>
 #include <kernel/mke.h>
 #include <kernel/boot_splash.h>
+#include <kernel/smp.h>
 #include <arch/x86/gdt.h>
 #include <arch/x86/idt.h>
+#include <arch/x86/cpu.h>
 
 /*
  * Do NOT put a huge static heap in .bss. Multiboot loaders may place the
@@ -64,6 +66,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     mm_init();
     gdt_init();
     idt_init();
+    cpu_init_bsp();
     irq_init();
     syscall_init();
     vfs_init();
@@ -74,6 +77,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     env_init();
     service_init();
     scheduler_init();
+    smp_init();
     time_init();
     klog("[boot] core init done\n");
 

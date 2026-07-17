@@ -12,6 +12,8 @@ typedef struct mkdx_api {
     int  (*present)(void);
     /* win_id > 0 → damage that window's frame; else full-screen dirty. */
     void (*mark_dirty)(int win_id);
+    /* Optional: window-local damage rect (x,y,w,h). NULL = unsupported. */
+    void (*mark_dirty_rect)(int win_id, int32_t x, int32_t y, int32_t w, int32_t h);
 
     long (*wm_create)(const void *args, uint32_t owner_pid);
     int  (*wm_set)(int id, const void *opts);

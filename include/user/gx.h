@@ -71,6 +71,11 @@ typedef struct ugx_fill_args {
     int32_t  radius; /* for FILL_ROUND */
 } ugx_fill_args;
 
+/* Window-local dirty rect for SYS_GX_DAMAGE_RECT */
+typedef struct ugx_damage_args {
+    int32_t x, y, w, h;
+} ugx_damage_args;
+
 typedef struct ugx_wallpaper {
     const uint32_t *pixels;
     uint32_t width;
@@ -113,6 +118,7 @@ int  ugx_set_wallpaper(const uint32_t *pixels, uint32_t w, uint32_t h, uint32_t 
 int  ugx_input_get(ugx_input_state *out);
 int  ugx_wm_pop_key(int win); /* -1 empty, else Latin-5 byte */
 int  ugx_damage(void);        /* mark frame dirty after userspace buffer paint */
+int  ugx_damage_rect(int win, int x, int y, int w, int h); /* uses ugx_damage_args */
 int  ugx_yield(void);
 void ugx_exit(int code);
 

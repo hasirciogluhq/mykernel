@@ -1,4 +1,5 @@
 #include <arch/x86/gdt.h>
+#include <arch/x86/cpu.h>
 #include <kernel/string.h>
 
 struct gdt_entry {
@@ -45,9 +46,12 @@ struct tss_entry {
     uint16_t iomap_base;
 } __attribute__((packed));
 
-static struct gdt_entry gdt[6];
+/* null + code/data×2 + per-CPU TSS */
+#define GDT_ENTRIES (5 + CPU_MAX)
+
+static struct gdt_entry gdt[GDT_ENTRIES];
 static struct gdt_ptr   gdtp;
-static struct tss_entry tss;
+static struct tss_entry tss[CPU_MAX];
 
 extern void gdt_flush(struct gdt_ptr *ptr);
 
@@ -62,28 +66,61 @@ static void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access,
     gdt[num].access = access;
 }
 
+static void gdt_set_tss(int cpu)
+{
+    uint32_t base = (uint32_t)&tss[cpu];
+    int idx = 5 + cpu;
+
+    memset(&tss[cpu], 0, sizeof(tss[cpu]));
+    tss[cpu].ss0 = GDT_KERNEL_DATA;
+    tss[cpu].iomap_base = (uint16_t)sizeof(tss[cpu]);
+    gdt_set_gate(idx, base, sizeof(tss[cpu]) - 1, 0x89, 0x00);
+}
+
 void gdt_set_kernel_stack(uint32_t esp0)
 {
-    tss.esp0 = esp0;
-    tss.ss0 = GDT_KERNEL_DATA;
+    int id = cpu_id();
+    if (id < 0 || id >= CPU_MAX)
+        id = 0;
+    tss[id].esp0 = esp0;
+    tss[id].ss0 = GDT_KERNEL_DATA;
+}
+
+void gdt_get_ptr(uint16_t *limit_out, uint32_t *base_out)
+{
+    if (limit_out)
+        *limit_out = gdtp.limit;
+    if (base_out)
+        *base_out = gdtp.base;
+}
+
+void gdt_load_cpu(int cpu)
+{
+    uint16_t sel;
+
+    if (cpu < 0 || cpu >= CPU_MAX)
+        return;
+    gdt_flush(&gdtp);
+    sel = (uint16_t)(GDT_TSS + (uint16_t)(cpu * 8));
+    __asm__ volatile("ltr %0" : : "r"(sel));
 }
 
 void gdt_init(void)
 {
+    int i;
+
     gdtp.limit = (uint16_t)(sizeof(gdt) - 1);
     gdtp.base = (uint32_t)&gdt;
 
-    memset(&tss, 0, sizeof(tss));
-    tss.ss0 = GDT_KERNEL_DATA;
-    tss.iomap_base = (uint16_t)sizeof(tss);
-
+    memset(gdt, 0, sizeof(gdt));
     gdt_set_gate(0, 0, 0, 0, 0);
     gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
     gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
     gdt_set_gate(3, 0, 0xFFFFFFFF, 0xFA, 0xCF);
     gdt_set_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF);
-    gdt_set_gate(5, (uint32_t)&tss, sizeof(tss) - 1, 0x89, 0x00);
 
-    gdt_flush(&gdtp);
-    __asm__ volatile("ltr %0" : : "r"((uint16_t)GDT_TSS));
+    for (i = 0; i < CPU_MAX; i++)
+        gdt_set_tss(i);
+
+    gdt_load_cpu(0);
 }

@@ -1,6 +1,5 @@
 #include <arch/x86/irq.h>
 #include <arch/x86/idt.h>
-#include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <drivers/driver.h>
 #include <arch/x86/io.h>
@@ -100,24 +99,11 @@ uint64_t irq_idle_ticks(void)
     return g_idle_ticks;
 }
 
-static void wake_sleepers(uint64_t now)
-{
-    process_t **table = process_table();
-
-    for (int i = 0; i < PROC_MAX; i++) {
-        process_t *p = table[i];
-        if (!p || p->state != PROC_BLOCKED)
-            continue;
-        if (p->wake_tick <= now)
-            p->state = PROC_READY;
-    }
-}
-
 void irq_dispatch(uint32_t irq)
 {
     if (irq == IRQ_TIMER) {
         g_timer_ticks++;
-        wake_sleepers(g_timer_ticks);
+        scheduler_wake_sleepers(g_timer_ticks);
         if (scheduler_current_is_idle() || !scheduler_has_runnable_apps())
             g_idle_ticks++;
         drivers_poll();

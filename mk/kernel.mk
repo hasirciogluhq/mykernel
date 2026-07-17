@@ -5,13 +5,16 @@ ARCH_ASM := $(SRC)/arch/x86/boot.asm \
             $(SRC)/arch/x86/isr.asm \
             $(SRC)/arch/x86/exc.asm \
             $(SRC)/arch/x86/irq.asm \
+            $(SRC)/arch/x86/ipi.asm \
             $(SRC)/arch/x86/gdt_flush.asm \
             $(SRC)/arch/x86/usermode.asm
 
 ARCH_C   := $(SRC)/arch/x86/idt.c \
             $(SRC)/arch/x86/gdt.c \
             $(SRC)/arch/x86/exception.c \
-            $(SRC)/arch/x86/irq_impl.c
+            $(SRC)/arch/x86/irq_impl.c \
+            $(SRC)/arch/x86/lapic.c \
+            $(SRC)/arch/x86/cpu.c
 
 KERNEL_C := $(SRC)/kernel/main.c \
             $(SRC)/kernel/heap.c \
@@ -20,6 +23,7 @@ KERNEL_C := $(SRC)/kernel/main.c \
             $(SRC)/kernel/env.c \
             $(SRC)/kernel/argv.c \
             $(SRC)/kernel/scheduler.c \
+            $(SRC)/kernel/smp.c \
             $(SRC)/kernel/time.c \
             $(SRC)/kernel/syscall.c \
             $(SRC)/kernel/vfs.c \
@@ -57,11 +61,21 @@ C_SRCS   := $(ARCH_C) $(KERNEL_C) $(LIB_C) $(DRV_C)
 
 ASM_OBJS := $(patsubst $(SRC)/%.asm,$(BUILD)/%.o,$(ASM_SRCS))
 C_OBJS   := $(patsubst $(SRC)/%.c,$(BUILD)/%.o,$(C_SRCS))
-OBJS     := $(ASM_OBJS) $(C_OBJS)
+TRAMP_BIN := $(BUILD)/smp_trampoline.bin
+TRAMP_OBJ := $(BUILD)/arch/x86/smp_tramp_blob.o
+OBJS     := $(ASM_OBJS) $(C_OBJS) $(TRAMP_OBJ)
 
 $(TARGET): $(OBJS) linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
+
+$(TRAMP_BIN): $(SRC)/arch/x86/smp_trampoline.asm
+	@mkdir -p $(dir $@)
+	$(AS) -f bin $< -o $@
+
+$(TRAMP_OBJ): $(SRC)/arch/x86/smp_tramp_blob.asm $(TRAMP_BIN)
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS) -I$(BUILD) $< -o $@
 
 $(BUILD)/%.o: $(SRC)/%.asm
 	@mkdir -p $(dir $@)

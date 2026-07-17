@@ -151,6 +151,7 @@ WindowOptions g_win_opts;
 ScreenInfo g_screen{};
 Input g_prev_input{};
 bool g_dirty = true;
+bool g_need_present = false;
 int g_theme_poll = 0;
 int g_clock_poll = 0;
 int g_opts_poll = 0;
@@ -579,6 +580,25 @@ void set_slider_from_x(int idx, int lx)
     }
 }
 
+void paint_sidebar_row(Surface &s, int i)
+{
+    if (i < 0 || i >= CAT_COUNT)
+        return;
+    const auto &t = theme();
+    const int top = ui_panel_body_top(2);
+    const int y = top + i * kSidebarRowStep;
+    const int text_dy = ui_text_inset_y(kSidebarRowH);
+    const bool selected = (i == g_active_category);
+    const bool hover = (i == g_hover_sidebar);
+
+    s.fill(8, y, kSidebarW - 16, kSidebarRowH, t.sidebar);
+    if (selected)
+        s.fill(8, y, kSidebarW - 16, kSidebarRowH, t.accent_soft);
+    else if (hover)
+        s.fill(8, y, kSidebarW - 16, kSidebarRowH, t.hover);
+    s.text(16, y + text_dy, kCategories[i].label, selected ? t.accent : t.text, 1);
+}
+
 void draw_sidebar(Surface &s)
 {
     const auto &t = theme();
@@ -587,18 +607,8 @@ void draw_sidebar(Surface &s)
     s.text(kPad, ui_panel_text_y(0), "Settings", t.text, 1);
     s.text(kPad, ui_panel_text_y(1), "preferences", t.text_dim, 1);
 
-    const int top = ui_panel_body_top(2);
-    const int text_dy = ui_text_inset_y(kSidebarRowH);
-    for (int i = 0; i < CAT_COUNT; i++) {
-        int y = top + i * kSidebarRowStep;
-        bool selected = (i == g_active_category);
-        bool hover = (i == g_hover_sidebar);
-        if (selected)
-            s.fill(8, y, kSidebarW - 16, kSidebarRowH, t.accent_soft);
-        else if (hover)
-            s.fill(8, y, kSidebarW - 16, kSidebarRowH, t.hover);
-        s.text(16, y + text_dy, kCategories[i].label, selected ? t.accent : t.text, 1);
-    }
+    for (int i = 0; i < CAT_COUNT; i++)
+        paint_sidebar_row(s, i);
 }
 
 void draw_scrollbar(Surface &s)
@@ -619,7 +629,7 @@ void draw_scrollbar(Surface &s)
     register_target(0, 0, TARGET_SCROLLBAR, 0);
 }
 
-void draw_dropdown_row(Surface &s, int y, int idx, bool hover)
+void draw_dropdown_row(Surface &s, int y, int idx, bool hover, bool track = true)
 {
     const auto &t = theme();
     const Setting &st = g_settings[idx];
@@ -627,6 +637,7 @@ void draw_dropdown_row(Surface &s, int y, int idx, bool hover)
     format_setting_value(st, val, sizeof(val));
     const int text_dy = ui_text_inset_y(kRowH);
 
+    s.fill(kContentX, y, kContentW, kRowH, t.bg);
     if (hover)
         s.fill(kContentX, y, kContentW, kRowH, t.hover);
     s.text(kContentX + 4, y + text_dy, st.label, t.text, 1);
@@ -637,16 +648,18 @@ void draw_dropdown_row(Surface &s, int y, int idx, bool hover)
     s.text(bx + 10, y + text_dy, val, t.accent, 1);
     s.text(bx + 120, y + text_dy, "v", t.text_dim, 1);
     s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
-    register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
+    if (track)
+        register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
 }
 
-void draw_toggle_row(Surface &s, int y, int idx, bool hover)
+void draw_toggle_row(Surface &s, int y, int idx, bool hover, bool track = true)
 {
     const auto &t = theme();
     const Setting &st = g_settings[idx];
     bool on = (st.current == 0);
     const int text_dy = ui_text_inset_y(kRowH);
 
+    s.fill(kContentX, y, kContentW, kRowH, t.bg);
     if (hover)
         s.fill(kContentX, y, kContentW, kRowH, t.hover);
     s.text(kContentX + 4, y + text_dy, st.label, t.text, 1);
@@ -656,10 +669,11 @@ void draw_toggle_row(Surface &s, int y, int idx, bool hover)
     int knob_x = on ? bx + 26 : bx + 2;
     s.fill_round(knob_x, y + 12, 12, 12, 6, t.panel);
     s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
-    register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
+    if (track)
+        register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
 }
 
-void draw_slider_row(Surface &s, int y, int idx, bool hover)
+void draw_slider_row(Surface &s, int y, int idx, bool hover, bool track = true)
 {
     const auto &t = theme();
     const Setting &st = g_settings[idx];
@@ -667,6 +681,7 @@ void draw_slider_row(Surface &s, int y, int idx, bool hover)
     format_setting_value(st, val, sizeof(val));
     const int text_dy = ui_text_inset_y(kRowH);
 
+    s.fill(kContentX, y, kContentW, kRowH, t.bg);
     if (hover)
         s.fill(kContentX, y, kContentW, kRowH, t.hover);
     s.text(kContentX + 4, y + text_dy, st.label, t.text, 1);
@@ -683,7 +698,8 @@ void draw_slider_row(Surface &s, int y, int idx, bool hover)
     s.fill_round(track_x, track_y, thumb, 4, 2, t.accent);
     s.fill_round(track_x + thumb - 5, track_y - 4, 10, 12, 5, t.accent);
     s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
-    register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
+    if (track)
+        register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
 }
 
 void begin_page(Surface &s, const char *title, const char *hint)
@@ -932,6 +948,61 @@ void paint()
     (void)y_start;
     g_win.damage();
     g_dirty = false;
+    g_need_present = true;
+}
+
+int setting_row_screen_y(int idx)
+{
+    for (int i = 0; i < g_target_count; i++) {
+        if (g_targets[i].kind == TARGET_SETTING && g_targets[i].index == idx)
+            return g_targets[i].y - g_scroll_y;
+    }
+    return -10000;
+}
+
+void paint_setting_row(Surface &s, int idx)
+{
+    if (idx < 0 || idx >= kSettingCount)
+        return;
+    int y = setting_row_screen_y(idx);
+    if (y + kRowH <= kContentTop || y >= kContentBot)
+        return;
+    bool hover = (idx == g_hover_setting);
+    if (g_settings[idx].kind == W_DROPDOWN)
+        draw_dropdown_row(s, y, idx, hover, false);
+    else if (g_settings[idx].kind == W_TOGGLE)
+        draw_toggle_row(s, y, idx, hover, false);
+    else
+        draw_slider_row(s, y, idx, hover, false);
+    g_win.damage(kContentX, y, kContentW, kRowH);
+}
+
+void paint_hover_delta(int old_sidebar, int new_sidebar, int old_setting, int new_setting)
+{
+    if (!g_win.ok())
+        return;
+    Surface &s = g_win.surface();
+    const int top = ui_panel_body_top(2);
+
+    if (old_sidebar != new_sidebar) {
+        if (old_sidebar >= 0) {
+            paint_sidebar_row(s, old_sidebar);
+            g_win.damage(8, top + old_sidebar * kSidebarRowStep,
+                         kSidebarW - 16, kSidebarRowH);
+        }
+        if (new_sidebar >= 0) {
+            paint_sidebar_row(s, new_sidebar);
+            g_win.damage(8, top + new_sidebar * kSidebarRowStep,
+                         kSidebarW - 16, kSidebarRowH);
+        }
+    }
+    if (old_setting != new_setting) {
+        if (old_setting >= 0)
+            paint_setting_row(s, old_setting);
+        if (new_setting >= 0)
+            paint_setting_row(s, new_setting);
+    }
+    g_need_present = true;
 }
 
 void update_hover(int lx, int ly)
@@ -942,11 +1013,15 @@ void update_hover(int lx, int ly)
     if (hit && hit->kind == TARGET_SETTING)
         next_setting = hit->index;
 
-    if (next_sidebar != g_hover_sidebar || next_setting != g_hover_setting) {
-        g_hover_sidebar = next_sidebar;
-        g_hover_setting = next_setting;
-        g_dirty = true;
-    }
+    if (next_sidebar == g_hover_sidebar && next_setting == g_hover_setting)
+        return;
+
+    int old_sidebar = g_hover_sidebar;
+    int old_setting = g_hover_setting;
+    g_hover_sidebar = next_sidebar;
+    g_hover_setting = next_setting;
+    /* Hover only: local row redraw — never full-window clear/paint. */
+    paint_hover_delta(old_sidebar, next_sidebar, old_setting, next_setting);
 }
 
 void handle_click(const Input &in)
@@ -1090,10 +1165,9 @@ extern "C" void mke_main(void)
 
         Input in{};
         if (hsrc::sdk::input(in)) {
-            const bool moved = in.mouse_x != g_prev_input.mouse_x ||
-                               in.mouse_y != g_prev_input.mouse_y;
             const uint8_t btn_delta = (uint8_t)(in.buttons ^ g_prev_input.buttons);
-            if (moved || btn_delta || in.wheel != 0) {
+            /* Geometry probe on click/wheel only — not every mouse move (S16). */
+            if (btn_delta || in.wheel != 0) {
                 g_opts_poll = kOptsPollEvery;
                 (void)refresh_window_options();
             }
@@ -1165,8 +1239,10 @@ extern "C" void mke_main(void)
             g_prev_input = in;
         }
 
-        if (g_dirty && (!g_win_opts.minimized || deeplink_nav)) {
+        if (g_dirty && (!g_win_opts.minimized || deeplink_nav))
             paint();
+        if (g_need_present) {
+            g_need_present = false;
             (void)hsrc::sdk::present();
         }
         hsrc::sdk::yield();

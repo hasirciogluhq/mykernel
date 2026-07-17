@@ -704,6 +704,19 @@ void Window::damage()
     (void)syscall1(SYS_GX_DAMAGE, id_);
 }
 
+void Window::damage(int x, int y, int w, int h)
+{
+    ugx_damage_args r;
+    if (id_ < 0 || w <= 0 || h <= 0)
+        return;
+    r.x = x;
+    r.y = y;
+    r.w = w;
+    r.h = h;
+    if (syscall2(SYS_GX_DAMAGE_RECT, id_, (long)&r) < 0)
+        (void)syscall1(SYS_GX_DAMAGE, id_);
+}
+
 bool screen_info(ScreenInfo &out)
 {
     ugx_info info{};
