@@ -6,7 +6,7 @@
 #include "compositor.h"
 #include "server.h"
 
-/* While dragging, this layer skips acrylic rebuild → opaque memcpy blit. */
+/* While dragging, this layer skips acrylic rebuild → opaque + corner-mask blit. */
 static int s_drag_fast_layer = -1;
 /* Pixels under the dragged window (sprite drag — keeps dock/siblings intact). */
 static gx_surface *s_drag_under;
@@ -290,6 +290,8 @@ static void blit_span(gx_surface *bb, int32_t dx, int32_t dy,
 }
 
 /* Fast path: opaque solid rows via memcpy when fully opaque source.
+ * Rounded layers: AA only on top/bottom corner bands; interior rows memcpy
+ * (keeps drag FPS while preserving the corner mask — C03/C12).
  * clip is in screen space; empty clip means full layer bounds. */
 static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity, gx_rect clip)
 {
@@ -303,9 +305,17 @@ static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity, gx_rect cli
         return;
 
     int32_t rad = L->corner_radius;
-    int fast_opaque = (L->style == GX_LAYER_OPAQUE && opacity == 255 && rad <= 0);
+    int32_t rr = rad;
+    int fast_opaque = (L->style == GX_LAYER_OPAQUE && opacity == 255);
     int32_t y0 = vis.y - r.y;
     int32_t y1 = y0 + vis.h;
+
+    if (rr * 2 > r.w)
+        rr = r.w / 2;
+    if (rr * 2 > r.h)
+        rr = r.h / 2;
+    if (rr < 0)
+        rr = 0;
 
     for (int32_t y = y0; y < y1; y++) {
         int32_t sy = r.y + y;
@@ -315,8 +325,8 @@ static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity, gx_rect cli
         if ((y & 31) == 0)
             ps2_poll();
 
-        if (rad > 0) {
-            /* Restrict round-row scan to the clipped horizontal span. */
+        /* Corner bands only — middle rows are fully opaque (round_span = full). */
+        if (rr > 0 && (y < rr || y >= r.h - rr)) {
             int32_t lx0 = vis.x - r.x;
             int32_t lx1 = lx0 + vis.w;
             int32_t rx0, rx1;
@@ -568,9 +578,9 @@ static void drag_blit_layer(gx_surface *dst, gx_layer *L, gx_rect clip)
 
     if (!L || !L->surface)
         return;
+    /* Skip acrylic rebuild; keep corner_radius so the mask stays correct. */
     tmp = *L;
     tmp.style = GX_LAYER_OPAQUE;
-    tmp.corner_radius = 0;
     blit_layer(dst, &tmp, 255, clip);
 }
 
@@ -774,11 +784,10 @@ void gx_compositor_compose_rect(gx_compositor *c, gx_surface *dst, gx_rect clip)
         if (gx_rect_empty(gx_rect_intersect(L->bounds, clip)))
             continue;
 
-        /* Drag preview: no frost rebuild / round AA — just slide the surface. */
+        /* Drag preview: no frost rebuild — opaque slide with corner mask (C03). */
         if (ids[i] == s_drag_fast_layer) {
             gx_layer tmp = *L;
             tmp.style = GX_LAYER_OPAQUE;
-            tmp.corner_radius = 0;
             blit_layer(dst, &tmp, 255, clip);
             continue;
         }

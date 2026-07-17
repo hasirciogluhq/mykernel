@@ -648,7 +648,7 @@ extern "C" void mke_main(void)
 
     if (!hsrc::sdk::screen_info(g_screen) || g_screen.width == 0 || g_screen.height == 0) {
         for (;;)
-            hsrc::sdk::yield();
+            hsrc::sdk::yield(32u);
     }
 
     g_self_pid = (pid_t)hsrc::sdk::process::getpid();

@@ -129,7 +129,7 @@ extern "C" void mke_main(void)
 
     if (!hsrc::sdk::screen_info(g_screen) || g_screen.width == 0) {
         for (;;)
-            hsrc::sdk::yield();
+            hsrc::sdk::yield(32u);
     }
 
     (void)refresh_theme();
@@ -256,7 +256,8 @@ extern "C" void mke_main(void)
             g_dirty = false;
             hsrc::sdk::yield(0);
         } else {
-            hsrc::sdk::yield(2);
+            /* Idle: Blocked sleep — bare yield(0)/yield(2) spun Ready forever. */
+            hsrc::sdk::yield(g_win_opts.minimized ? 32u : 12u);
         }
     }
 }

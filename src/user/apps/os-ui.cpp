@@ -1057,7 +1057,7 @@ extern "C" void mke_main(void)
     ScreenInfo info{};
     if (!hsrc::sdk::screen_info(info) || info.width == 0 || info.height == 0) {
         for (;;)
-            hsrc::sdk::yield();
+            hsrc::sdk::yield(32u);
     }
 
     g_sw = (int)info.width;
@@ -1070,7 +1070,7 @@ extern "C" void mke_main(void)
         (void)hsrc::sdk::set_wallpaper_color(rgb(160, 30, 30));
         (void)hsrc::sdk::present();
         for (;;)
-            hsrc::sdk::yield();
+            hsrc::sdk::yield(32u);
     }
 
     (void)hsrc::sdk::present();
@@ -1228,13 +1228,20 @@ extern "C" void mke_main(void)
             (void)hsrc::sdk::present();
 
         /*
-         * Stay hot while the pointer is on shell chrome or dock is animating.
-         * Long sleeps here made the desktop lag whenever no yield(0) app
-         * (settings) was open to pace input/compose.
+         * yield(0) keeps Ready forever — only after present for one quantum.
+         * Near chrome / animating: short Blocked wake (1 tick) so dock mag
+         * and menubar stay responsive without a CPU spin.
+         * Truly idle: longer Blocked sleep.
          */
-        const bool shell_hot = animating() || g_hover >= 0 ||
-                               g_menu_hover >= 0 || g_status_hover >= 0 ||
-                               did_work;
-        hsrc::sdk::yield(shell_hot ? 0u : 1u);
+        const bool near_chrome = g_hover >= 0 || g_menu_hover >= 0 ||
+                                 g_status_hover >= 0 || g_mag_cursor_x >= 0;
+        uint32_t sleep_ticks;
+        if (did_work)
+            sleep_ticks = 0u;
+        else if (animating() || near_chrome)
+            sleep_ticks = 1u;
+        else
+            sleep_ticks = 8u;
+        hsrc::sdk::yield(sleep_ticks);
     }
 }

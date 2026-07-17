@@ -1091,7 +1091,7 @@ extern "C" void mke_main(void)
 
     if (!hsrc::sdk::screen_info(g_screen) || g_screen.width == 0 || g_screen.height == 0) {
         for (;;)
-            hsrc::sdk::yield();
+            hsrc::sdk::yield(32u);
     }
 
     load_settings();
@@ -1241,7 +1241,13 @@ extern "C" void mke_main(void)
         if (g_need_present) {
             g_need_present = false;
             (void)hsrc::sdk::present();
+            /* Present path: stay Ready for one quantum so hover/drag stay snappy. */
+            hsrc::sdk::yield(0);
+        } else if (g_drag_slider >= 0 || g_drag_scroll) {
+            hsrc::sdk::yield(0);
+        } else {
+            /* Idle: Blocked sleep — bare yield(0) spun at ~100% CPU (Ready forever). */
+            hsrc::sdk::yield(g_win_opts.minimized ? 32u : 12u);
         }
-        hsrc::sdk::yield();
     }
 }

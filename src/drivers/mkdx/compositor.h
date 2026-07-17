@@ -57,7 +57,7 @@ int  gx_compositor_add_layer(gx_compositor *c, gx_layer *desc);
 void gx_compositor_remove_layer(gx_compositor *c, int id);
 gx_layer *gx_compositor_layer(gx_compositor *c, int id);
 void gx_compositor_raise(gx_compositor *c, int id);
-/* Live drag: layer paints as opaque memcpy (no acrylic tile rebuild). -1 = off. */
+/* Live drag: opaque slide (no acrylic rebuild); corner mask kept. -1 = off. */
 void gx_compositor_set_drag_layer(int layer_id);
 /* Sprite drag: save underlay, restore old, capture new, blit window. */
 void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,

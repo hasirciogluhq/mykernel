@@ -192,9 +192,9 @@ void *realloc(void *p, size_t n)
 
 void abort(void)
 {
-    /* Never busy-spin: cooperative scheduler would freeze the whole OS. */
+    /* Blocked sleep — bare yield(0) keeps Ready forever and burns CPU. */
     for (;;)
-        hsrc::sdk::yield();
+        hsrc::sdk::yield(32u);
 }
 
 char *strchr(const char *s, int c)

@@ -33,8 +33,6 @@ static heap_block_t *free_list;
 static size_t g_used;
 static spinlock_t g_heap_lock;
 
-static void free_raw_locked_region(heap_block_t *blk);
-
 static size_t align_up_sz(size_t n, size_t align)
 {
     return (n + (align - 1u)) & ~(align - 1u);
@@ -474,9 +472,8 @@ size_t heap_free(void)
     if (heap_end > wilderness)
         n += (size_t)(heap_end - wilderness);
     for (b = free_list; b; b = b->next) {
-        if (b->magic == HEAP_MAGIC_FREE && block_span_ok(b) &&
-            b->size > HEAP_HDR_SIZE)
-            n += b->size - HEAP_HDR_SIZE;
+        if (b->magic == HEAP_MAGIC_FREE && block_span_ok(b))
+            n += b->size;
     }
     spin_unlock_irqrestore(&g_heap_lock, flags);
     return n;
