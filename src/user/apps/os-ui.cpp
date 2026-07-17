@@ -208,7 +208,14 @@ extern "C" void mke_main(void)
 
             const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_buttons);
             if (pressed & UGX_BTN_LEFT) {
-                /* Dock is visual for now — bounce feedback via hover paint. */
+                if (g_hover == 1) {
+                    /* Term dock icon → focus existing Terminal window */
+                    long tid = hsrc::sdk::syscall1(SYS_WM_FIND, (long)"Terminal");
+                    if (tid >= 0) {
+                        (void)hsrc::sdk::syscall1(SYS_WM_FOCUS, tid);
+                        (void)hsrc::sdk::syscall2(SYS_WM_SHOW, tid, 1);
+                    }
+                }
                 if (g_hover >= 0)
                     paint_dock();
             }

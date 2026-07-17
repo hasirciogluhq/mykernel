@@ -49,6 +49,11 @@ static process_t *alloc_process(const char *name)
     for (int f = 0; f < VFS_MAX_FD; f++)
         p->fds[f] = -1;
 
+    /* Default credentials: root. Shell / desktop spawn with full rights. */
+    p->uid = 0;
+    p->euid = 0;
+    strcpy(p->cwd, "/");
+
     int cfd = vfs_open("/dev/console", O_RDWR);
     if (cfd >= 0) {
         p->fds[STDIN_FILENO] = cfd;

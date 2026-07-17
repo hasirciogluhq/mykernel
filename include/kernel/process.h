@@ -3,6 +3,7 @@
 
 #include <kernel/types.h>
 #include <kernel/vfs.h>
+#include <kernel/mm.h>
 
 #define PROC_MAX         16
 #define PROC_KSTACK_SIZE 8192
@@ -22,6 +23,9 @@ typedef struct process {
     proc_state_t state;
     char         name[PROC_NAME_MAX];
     int          is_user;      /* 1 = ring-3 userspace */
+    uid_t        uid;          /* real uid — default 0 (root) */
+    uid_t        euid;         /* effective uid — default 0 (root) */
+    char         cwd[VFS_PATH_MAX];
     uint32_t    *kstack_base;
     uint32_t     kstack_top;
     uint32_t     ustack_top;
@@ -29,6 +33,7 @@ typedef struct process {
     void       (*user_entry)(void);
     int          exit_code;
     int          fds[VFS_MAX_FD];
+    vma_t        vmas[VMA_MAX];
 } process_t;
 
 void       process_init(void);

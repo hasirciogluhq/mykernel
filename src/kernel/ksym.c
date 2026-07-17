@@ -5,6 +5,8 @@
 #include <kernel/mkdx_api.h>
 #include <kernel/vfs_api.h>
 #include <kernel/block_api.h>
+#include <kernel/initrd_store.h>
+#include <kernel/process.h>
 #include <drivers/driver.h>
 #include <drivers/pci.h>
 #include <drivers/display.h>
@@ -64,6 +66,8 @@ static const ksym_t g_ksyms[] = {
     { "vfs_api_get",        (void *)vfs_api_get },
     { "block_api_register", (void *)block_api_register },
     { "block_api_get",      (void *)block_api_get },
+    { "initrd_store_get",   (void *)initrd_store_get },
+    { "process_current",    (void *)process_current },
 
     { "console_read",       (void *)console_read },
     { "console_write",      (void *)console_write },

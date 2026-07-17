@@ -76,6 +76,14 @@ int vfs_mkdir(const char *path, int mode)
     return a->mkdir(path, mode);
 }
 
+int vfs_readdir(int fd, void *dirent, size_t max)
+{
+    const vfs_api_t *a = api();
+    if (!a || !a->readdir)
+        return -ENOTSUP;
+    return a->readdir(fd, dirent, max);
+}
+
 int vfs_aio_submit(vfs_aio_t *aio)
 {
     const vfs_api_t *a = api();

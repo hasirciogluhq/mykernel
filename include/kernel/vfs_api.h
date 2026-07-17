@@ -3,16 +3,12 @@
 
 #include <kernel/types.h>
 
-/*
- * Thin ABI: core syscalls → vfs.kmod.
- * Unsupported / missing ops return -ENOTSUP (hard fail).
- */
 typedef struct vfs_aio {
     int      fd;
     void    *buf;
     size_t   count;
     off_t    pos;
-    int      write; /* 0=read 1=write */
+    int      write;
     volatile int done;
     ssize_t  result;
     void   (*complete)(struct vfs_aio *aio);
@@ -38,18 +34,36 @@ typedef struct vfs_api {
     int     (*fsync)(int fd);
     int     (*readdir)(int fd, void *dirent, size_t max);
 
-    /* Kernel-level async I/O (completion may run from block poll). */
     int     (*aio_submit)(vfs_aio_t *aio);
     int     (*aio_wait)(vfs_aio_t *aio);
     int     (*aio_poll)(void);
 
-    /* Driver registration surface (used by other kmods via ksym). */
     int     (*register_filesystem)(const void *fs_type);
     int     (*unregister_filesystem)(const char *name);
-
-    /* Alloc helpers for filesystem kmods (typed as void* to keep ABI thin). */
     void   *(*alloc_inode)(void *sb, uint32_t mode);
     void   *(*alloc_dentry)(const char *name, void *parent, void *inode);
+
+    /* xattr */
+    int (*getxattr)(const char *path, const char *name, void *value, size_t size);
+    int (*setxattr)(const char *path, const char *name, const void *value, size_t size, int flags);
+    int (*listxattr)(const char *path, char *list, size_t size);
+    int (*removexattr)(const char *path, const char *name);
+
+    /* flock */
+    int (*flock)(int fd, int cmd, void *fl);
+
+    /* fsnotify */
+    int (*fsnotify_add_watch)(const char *path, uint32_t mask);
+    int (*fsnotify_rm_watch)(int wd);
+    int (*fsnotify_read)(int wd, void *events, size_t max);
+
+    /* page cache helpers for FS drivers */
+    ssize_t (*cached_read)(void *inode, void *buf, size_t count, off_t pos);
+    ssize_t (*cached_write)(void *inode, const void *buf, size_t count, off_t pos);
+    int     (*cache_invalidate)(void *inode);
+
+    /* load kmod from filesystem path */
+    int (*module_load_path)(const char *path);
 } vfs_api_t;
 
 void              vfs_api_register(const vfs_api_t *api);

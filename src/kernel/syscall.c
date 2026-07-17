@@ -26,6 +26,98 @@ void syscall_isr_handler(regs_t *r)
         (long)r->edi);
 }
 
+/* Collapse ".", "..", and duplicate slashes into an absolute path. */
+static int path_normalize(char *path)
+{
+    char out[VFS_PATH_MAX];
+    char *parts[64];
+    int nparts = 0;
+    char *p;
+    size_t i, len;
+
+    if (!path || path[0] != '/')
+        return -1;
+
+    len = strlen(path);
+    if (len >= VFS_PATH_MAX)
+        return -1;
+
+    {
+        char tmp[VFS_PATH_MAX];
+        strcpy(tmp, path);
+        p = tmp;
+        while (*p) {
+            char *start;
+            while (*p == '/')
+                p++;
+            if (!*p)
+                break;
+            start = p;
+            while (*p && *p != '/')
+                p++;
+            if (*p)
+                *p++ = 0;
+            if (strcmp(start, ".") == 0)
+                continue;
+            if (strcmp(start, "..") == 0) {
+                if (nparts > 0)
+                    nparts--;
+                continue;
+            }
+            if (nparts >= (int)(sizeof(parts) / sizeof(parts[0])))
+                return -1;
+            parts[nparts++] = start;
+        }
+        out[0] = '/';
+        out[1] = 0;
+        for (i = 0; i < (size_t)nparts; i++) {
+            size_t ol = strlen(out);
+            size_t pl = strlen(parts[i]);
+            if (ol + (out[1] ? 1u : 0u) + pl + 1 >= sizeof(out))
+                return -1;
+            if (out[1] != 0) {
+                out[ol] = '/';
+                memcpy(out + ol + 1, parts[i], pl + 1);
+            } else {
+                memcpy(out + 1, parts[i], pl + 1);
+            }
+        }
+        strcpy(path, out);
+    }
+    return 0;
+}
+
+static int resolve_path(process_t *p, const char *in, char *out, size_t outsz)
+{
+    size_t cl, il, n;
+
+    if (!p || !in || !out || outsz < 2)
+        return -1;
+    if (in[0] == '/') {
+        if (strlen(in) >= outsz)
+            return -1;
+        strcpy(out, in);
+    } else {
+        cl = strlen(p->cwd);
+        il = strlen(in);
+        if (strcmp(p->cwd, "/") == 0) {
+            n = 1 + il + 1;
+            if (n > outsz)
+                return -1;
+            out[0] = '/';
+            memcpy(out + 1, in, il + 1);
+        } else {
+            n = cl + 1 + il + 1;
+            if (n > outsz)
+                return -1;
+            memcpy(out, p->cwd, cl);
+            out[cl] = '/';
+            memcpy(out + cl + 1, in, il + 1);
+        }
+    }
+    return path_normalize(out);
+}
+
 static long do_exit(long code)
 {
     process_exit((int)code);
@@ -97,17 +189,20 @@ static long do_write(long fd, long buf, long count)
 static long do_open(long path, long flags)
 {
     process_t *p = process_current();
-    char kpath[256];
+    char upath[VFS_PATH_MAX];
+    char kpath[VFS_PATH_MAX];
     int len;
     int vfd;
     int ufd;
 
     if (!p)
         return -1;
-    len = user_strlen((const char *)path, sizeof(kpath));
+    len = user_strlen((const char *)path, sizeof(upath));
     if (len < 0)
         return -1;
-    if (copy_from_user(kpath, (const void *)path, (size_t)len + 1) < 0)
+    if (copy_from_user(upath, (const void *)path, (size_t)len + 1) < 0)
+        return -1;
+    if (resolve_path(p, upath, kpath, sizeof(kpath)) < 0)
         return -1;
 
     vfd = vfs_open(kpath, (int)flags);
@@ -165,14 +260,94 @@ static long do_lseek(long fd, long off, long whence)
 
 static long do_mkdir(long path, long mode)
 {
-    char kpath[256];
+    process_t *p = process_current();
+    char upath[VFS_PATH_MAX];
+    char kpath[VFS_PATH_MAX];
     int len;
-    len = user_strlen((const char *)path, sizeof(kpath));
+    if (!p)
+        return -EFAULT;
+    len = user_strlen((const char *)path, sizeof(upath));
     if (len < 0)
         return -EFAULT;
-    if (copy_from_user(kpath, (const void *)path, (size_t)len + 1) < 0)
+    if (copy_from_user(upath, (const void *)path, (size_t)len + 1) < 0)
         return -EFAULT;
+    if (resolve_path(p, upath, kpath, sizeof(kpath)) < 0)
+        return -EINVAL;
     return vfs_mkdir(kpath, (int)mode);
+}
+
+static long do_chdir(long path)
+{
+    process_t *p = process_current();
+    char upath[VFS_PATH_MAX];
+    char kpath[VFS_PATH_MAX];
+    int len, vfd;
+    if (!p)
+        return -EFAULT;
+    len = user_strlen((const char *)path, sizeof(upath));
+    if (len < 0)
+        return -EFAULT;
+    if (copy_from_user(upath, (const void *)path, (size_t)len + 1) < 0)
+        return -EFAULT;
+    if (resolve_path(p, upath, kpath, sizeof(kpath)) < 0)
+        return -EINVAL;
+    vfd = vfs_open(kpath, O_RDONLY | O_DIRECTORY);
+    if (vfd < 0)
+        return vfd;
+    vfs_close(vfd);
+    strncpy(p->cwd, kpath, sizeof(p->cwd) - 1);
+    p->cwd[sizeof(p->cwd) - 1] = 0;
+    return 0;
+}
+
+static long do_getcwd(long buf, long size)
+{
+    process_t *p = process_current();
+    size_t n;
+    if (!p || !buf || size <= 0)
+        return -EFAULT;
+    n = strlen(p->cwd) + 1;
+    if ((size_t)size < n)
+        return -ERANGE;
+    if (copy_to_user((void *)buf, p->cwd, n) < 0)
+        return -EFAULT;
+    return (long)n;
+}
+
+static long do_getdents(long fd, long buf, long count)
+{
+    process_t *p = process_current();
+    vfs_dirent_t ents[32];
+    int vfd, n;
+    size_t max, bytes;
+
+    if (!p || !buf || count <= 0)
+        return -EINVAL;
+    vfd = process_lookup_fd(p, (int)fd);
+    if (vfd < 0)
+        return -EBADF;
+    max = (size_t)count;
+    if (max > sizeof(ents) / sizeof(ents[0]))
+        max = sizeof(ents) / sizeof(ents[0]);
+    n = vfs_readdir(vfd, ents, max);
+    if (n < 0)
+        return n;
+    bytes = (size_t)n * sizeof(vfs_dirent_t);
+    if (copy_to_user((void *)buf, ents, bytes) < 0)
+        return -EFAULT;
+    return n;
+}
+
+static long do_getuid(void)
+{
+    process_t *p = process_current();
+    return p ? (long)p->uid : 0;
+}
+
+static long do_geteuid(void)
+{
+    process_t *p = process_current();
+    return p ? (long)p->euid : 0;
 }
 
 static long do_mount(long source, long target, long fstype, long flags, long data)
@@ -451,10 +626,15 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
     case SYS_WRITE:  return do_write(a1, a2, a3);
     case SYS_OPEN:   return do_open(a1, a2);
     case SYS_CLOSE:  return do_close(a1);
+    case SYS_CHDIR:  return do_chdir(a1);
     case SYS_LSEEK:  return do_lseek(a1, a2, a3);
     case SYS_MKDIR:  return do_mkdir(a1, a2);
     case SYS_MOUNT:  return do_mount(a1, a2, a3, a4, a5);
     case SYS_UMOUNT: return do_umount(a1, a2);
+    case SYS_GETUID: return do_getuid();
+    case SYS_GETEUID: return do_geteuid();
+    case SYS_GETDENTS: return do_getdents(a1, a2, a3);
+    case SYS_GETCWD: return do_getcwd(a1, a2);
     case SYS_AIO_SUBMIT: return do_aio_submit(a1);
     case SYS_AIO_WAIT:   return do_aio_wait(a1);
     case SYS_GETPID: return do_getpid();

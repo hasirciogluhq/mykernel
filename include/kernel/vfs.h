@@ -24,6 +24,16 @@
 #define MS_BIND   0x1000
 #define MNT_FORCE 1
 
+/* Must match drivers/vfs_fs.h vfs_dirent_t layout. */
+#ifndef MYKERNEL_VFS_DIRENT_DEFINED
+#define MYKERNEL_VFS_DIRENT_DEFINED
+typedef struct vfs_dirent {
+    uint32_t ino;
+    uint32_t type; /* S_IF* from drivers/vfs_fs.h */
+    char     name[64];
+} vfs_dirent_t;
+#endif
+
 /* Core bootstrap / thin shim → vfs.kmod */
 void    vfs_init(void);
 int     vfs_open(const char *path, int flags);
@@ -35,6 +45,7 @@ int     vfs_mount(const char *source, const char *target,
                   const char *fstype, unsigned long flags, const void *data);
 int     vfs_umount(const char *target, int flags);
 int     vfs_mkdir(const char *path, int mode);
+int     vfs_readdir(int fd, void *dirent, size_t max);
 int     vfs_aio_submit(vfs_aio_t *aio);
 int     vfs_aio_wait(vfs_aio_t *aio);
 

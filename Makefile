@@ -192,8 +192,10 @@ SDK_OBJS := $(BUILD)/user/sdk/syscall.o \
             $(BUILD)/user/string.o
 
 MKE_OSUI := $(USEROUT)/os-ui.mke
-MKES     := $(MKE_OSUI)
+MKE_TERM := $(USEROUT)/terminal.mke
+MKES     := $(MKE_OSUI) $(MKE_TERM)
 LOAD_OSUI := 0x02000000
+LOAD_TERM := 0x02200000
 
 .PHONY: all drivers userapps run clean
 
@@ -265,6 +267,14 @@ $(USEROUT)/os-ui.elf: $(BUILD)/user/apps/os-ui.o $(SDK_OBJS) user.ld
 
 $(MKE_OSUI): $(USEROUT)/os-ui.elf $(PACK_MKE)
 	$(call pack_mke_from_elf,$<,$(USEROUT)/os-ui.bin,$@,$(LOAD_OSUI),os-ui)
+
+$(USEROUT)/terminal.elf: $(BUILD)/user/apps/terminal.o $(SDK_OBJS) user.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(USERLDFLAGS) --defsym=LOAD_ADDR=$(LOAD_TERM) -o $@ \
+		$(BUILD)/user/apps/terminal.o $(SDK_OBJS)
+
+$(MKE_TERM): $(USEROUT)/terminal.elf $(PACK_MKE)
+	$(call pack_mke_from_elf,$<,$(USEROUT)/terminal.bin,$@,$(LOAD_TERM),terminal)
 
 $(INITRD): $(PACKER) $(KMODS) $(MKES)
 	$(PACKER) $@ $(KMODS) $(MKES)

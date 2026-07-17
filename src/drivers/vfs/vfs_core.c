@@ -291,6 +291,56 @@ static int vfs_do_umount(const char *target, int flags)
     return -ENOENT;
 }
 
+static int vfs_create_leaf(const char *path, int mode, dentry_t **out)
+{
+    char parent[VFS_PATH_MAX];
+    char leaf[64];
+    const char *slash;
+    dentry_t *dir;
+    dentry_t probe;
+    int err = 0;
+    size_t plen;
+
+    if (!path || path[0] != '/')
+        return -EINVAL;
+    slash = path + strlen(path);
+    while (slash > path && slash[-1] != '/')
+        slash--;
+    plen = (size_t)(slash - path);
+    if (plen == 0 || strlen(slash) == 0 || strlen(slash) >= sizeof(leaf))
+        return -EINVAL;
+    if (plen >= sizeof(parent))
+        return -ENAMETOOLONG;
+    memcpy(parent, path, plen);
+    parent[plen] = 0;
+    if (plen > 1 && parent[plen - 1] == '/')
+        parent[plen - 1] = 0;
+    if (parent[0] == 0)
+        strcpy(parent, "/");
+    strncpy(leaf, slash, sizeof(leaf) - 1);
+    leaf[sizeof(leaf) - 1] = 0;
+
+    dir = path_walk(parent, &err);
+    if (!dir)
+        return err ? err : -ENOENT;
+    if (!dir->d_inode || !dir->d_inode->i_op || !dir->d_inode->i_op->create) {
+        dir->d_ref--;
+        return -ENOTSUP;
+    }
+    memset(&probe, 0, sizeof(probe));
+    strncpy(probe.d_name, leaf, sizeof(probe.d_name) - 1);
+    probe.d_parent = dir;
+    err = dir->d_inode->i_op->create(dir->d_inode, &probe, mode | S_IFREG);
+    if (err < 0) {
+        dir->d_ref--;
+        return err;
+    }
+    dir->d_ref--;
+    /* Re-walk full path so we get a referenced dentry */
+    *out = path_walk(path, &err);
+    return (*out) ? 0 : (err ? err : -ENOENT);
+}
+
 static int vfs_do_open(const char *path, int flags)
 {
     dentry_t *d;
@@ -300,8 +350,15 @@ static int vfs_do_open(const char *path, int flags)
     int rc;
 
     d = path_walk(path, &err);
-    if (!d)
-        return err ? err : -ENOENT;
+    if (!d) {
+        if ((flags & O_CREAT) && err == -ENOENT) {
+            err = vfs_create_leaf(path, 0644, &d);
+            if (err < 0)
+                return err;
+        } else {
+            return err ? err : -ENOENT;
+        }
+    }
     if (!d->d_inode) {
         d->d_ref--;
         return -ENOENT;

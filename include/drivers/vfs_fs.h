@@ -17,6 +17,7 @@
 
 #define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
 #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
 
 struct inode;
 struct dentry;
@@ -24,6 +25,7 @@ struct file;
 struct super_block;
 struct vfsmount;
 struct file_system_type;
+struct address_space;
 
 typedef struct inode_operations {
     struct dentry *(*lookup)(struct inode *dir, struct dentry *dentry);
@@ -39,6 +41,9 @@ typedef struct inode_operations {
     int (*setattr)(struct dentry *dentry, void *attr);
     int (*getattr)(struct dentry *dentry, void *statbuf);
     int (*listxattr)(struct dentry *dentry, char *list, size_t size);
+    int (*getxattr)(struct dentry *dentry, const char *name, void *value, size_t size);
+    int (*setxattr)(struct dentry *dentry, const char *name, const void *value, size_t size, int flags);
+    int (*removexattr)(struct dentry *dentry, const char *name);
     int (*permission)(struct inode *inode, int mask);
     const char *(*get_link)(struct dentry *dentry, struct inode *inode);
 } inode_operations_t;
@@ -57,7 +62,6 @@ typedef struct file_operations {
     int     (*open)(struct inode *inode, struct file *file);
     int     (*release)(struct inode *inode, struct file *file);
     int     (*readdir)(struct file *file, void *dirent, size_t max);
-    /* Async path: return 0 if queued, complete via callback later. */
     int     (*aio_read)(struct file *file, void *buf, size_t count, off_t pos,
                         void (*done)(void *ctx, ssize_t n), void *ctx);
     int     (*aio_write)(struct file *file, const void *buf, size_t count, off_t pos,
@@ -72,6 +76,18 @@ typedef struct dentry_operations {
     int (*d_revalidate)(struct dentry *dentry);
 } dentry_operations_t;
 
+typedef struct address_space_operations {
+    int (*readpage)(struct inode *inode, void *page, uint64_t index);
+    int (*writepage)(struct inode *inode, const void *page, uint64_t index);
+    int (*writepages)(struct inode *inode);
+    int (*invalidate)(struct inode *inode);
+} address_space_operations_t;
+
+typedef struct address_space {
+    struct inode *host;
+    const address_space_operations_t *a_ops;
+} address_space_t;
+
 typedef struct super_operations {
     struct inode *(*alloc_inode)(struct super_block *sb);
     void (*destroy_inode)(struct inode *inode);
@@ -81,6 +97,13 @@ typedef struct super_operations {
     int  (*sync_fs)(struct super_block *sb, int wait);
     int  (*show_options)(struct super_block *sb, char *buf, size_t len);
 } super_operations_t;
+
+typedef struct xattr_entry {
+    char name[64];
+    void *value;
+    size_t size;
+    struct xattr_entry *next;
+} xattr_entry_t;
 
 typedef struct inode {
     uint32_t i_ino;
@@ -95,6 +118,8 @@ typedef struct inode {
     const inode_operations_t *i_op;
     const file_operations_t  *i_fop;
     struct super_block       *i_sb;
+    address_space_t          *i_mapping;
+    xattr_entry_t            *i_xattrs;
     void                     *i_private;
     int                       i_ref;
 } inode_t;
@@ -102,11 +127,16 @@ typedef struct inode {
 typedef struct dentry {
     char               d_name[64];
     struct dentry     *d_parent;
+    struct dentry     *d_child;   /* first child */
+    struct dentry     *d_sibling; /* next sibling */
     inode_t           *d_inode;
     struct super_block *d_sb;
     const dentry_operations_t *d_op;
     void              *d_private;
+    struct dentry     *d_hash_next;
+    uint32_t           d_hash;
     int                d_ref;
+    int                d_cached;
 } dentry_t;
 
 typedef struct file {
@@ -162,10 +192,43 @@ typedef struct vfs_stat {
     uint32_t st_ctime;
 } vfs_stat_t;
 
+#ifndef MYKERNEL_VFS_DIRENT_DEFINED
+#define MYKERNEL_VFS_DIRENT_DEFINED
 typedef struct vfs_dirent {
     uint32_t ino;
-    uint32_t type; /* S_IF* */
+    uint32_t type;
     char     name[64];
 } vfs_dirent_t;
+#endif
+
+/* flock */
+#define F_RDLCK 0
+#define F_WRLCK 1
+#define F_UNLCK 2
+#define F_SETLK  6
+#define F_SETLKW 7
+#define F_GETLK  5
+
+typedef struct flock {
+    int16_t  l_type;
+    int16_t  l_whence;
+    off_t    l_start;
+    off_t    l_len;
+    int32_t  l_pid;
+} flock_t;
+
+/* fsnotify */
+#define FS_CREATE 0x01
+#define FS_DELETE 0x02
+#define FS_MODIFY 0x04
+#define FS_MOVE   0x08
+#define FS_ACCESS 0x10
+
+typedef struct fsnotify_event {
+    uint32_t mask;
+    uint32_t cookie;
+    char     name[64];
+    char     path[VFS_PATH_MAX];
+} fsnotify_event_t;
 
 #endif

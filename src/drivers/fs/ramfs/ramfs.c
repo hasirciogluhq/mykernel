@@ -218,6 +218,14 @@ static int ramfs_init(driver_t *drv, void *ctx)
     /* Auto-mount as root if none yet */
     if (api->mount(NULL, "/", "ramfs", 0, NULL) < 0)
         return -1;
+    if (api->mkdir) {
+        (void)api->mkdir("/root", 0755);
+        (void)api->mkdir("/home", 0755);
+        (void)api->mkdir("/tmp", 0755);
+        (void)api->mkdir("/etc", 0755);
+        (void)api->mkdir("/usr", 0755);
+        (void)api->mkdir("/var", 0755);
+    }
     vga_print("ramfs: mounted /\n");
     return 0;
 }
