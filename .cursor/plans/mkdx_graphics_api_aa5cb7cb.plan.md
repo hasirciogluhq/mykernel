@@ -12,8 +12,8 @@ todos:
     content: Multiboot mods / initrd ile boot aninda display+mkdx load; VFS yok
     status: completed
   - id: display-backends
-    content: "display_ops + BGA OK; virtio kmod iskelet (scanout yok → display_register etmiyor; virtio>bga henüz aktif değil)"
-    status: pending
+    content: display_ops; BGA + virtio-gpu 2D scanout; probe virtio>bga; GetScreenSize
+    status: completed
   - id: mkdx-driver
     content: "MKDX compositor/Present/blur OK; 2D clip/opacity/round OK; mask uygulanmiyor; 3D buffer/pipeline/submit iskelet"
     status: completed

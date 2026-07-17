@@ -69,7 +69,8 @@ OBJS     := $(ASM_OBJS) $(C_OBJS)
 
 # ---- loadable drivers (.kmod = relocatable ELF) ----
 BGA_SRCS := $(SRC)/drivers/display/bga/bga.c
-VIRTIO_SRCS := $(SRC)/drivers/display/virtio_gpu/virtio_gpu.c
+VIRTIO_SRCS := $(SRC)/drivers/display/virtio_gpu/virtio_pci.c \
+               $(SRC)/drivers/display/virtio_gpu/virtio_gpu.c
 MKDX_SRCS := $(SRC)/drivers/mkdx/surface.c \
              $(SRC)/drivers/mkdx/draw.c \
              $(SRC)/drivers/mkdx/blur.c \
@@ -92,7 +93,7 @@ KMOD_VIRTIO := $(DRIVERS)/display_virtio.kmod
 KMOD_MKDX   := $(DRIVERS)/mkdx.kmod
 KMODS       := $(KMOD_BGA) $(KMOD_VIRTIO) $(KMOD_MKDX)
 
-.PHONY: all drivers run clean
+.PHONY: all drivers run run-bga run-virtio clean
 
 all: $(TARGET) $(INITRD)
 
@@ -129,8 +130,18 @@ $(BUILD)/%.o: $(SRC)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(MODCFLAGS) -c $< -o $@
 
+# Both backends present: virtio-gpu wins (DISPLAY_PRIO_VIRTIO > BGA)
 run: $(TARGET) $(INITRD)
+	$(QEMU) -kernel $(TARGET) -initrd $(INITRD) -m 128M \
+		-vga std -device virtio-gpu-pci
+
+# BGA only
+run-bga: $(TARGET) $(INITRD)
 	$(QEMU) -kernel $(TARGET) -initrd $(INITRD) -m 128M -vga std
+
+# Virtio-vga only (no Bochs BGA)
+run-virtio: $(TARGET) $(INITRD)
+	$(QEMU) -kernel $(TARGET) -initrd $(INITRD) -m 128M -vga virtio
 
 clean:
 	rm -rf $(BUILD)

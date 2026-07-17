@@ -37,6 +37,56 @@ uint32_t pci_bar_addr(uint32_t bar)
     return bar & ~0xFu;     /* MMIO */
 }
 
+uint8_t pci_config_read8(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset)
+{
+    uint32_t v = pci_config_read(bus, slot, func, (uint8_t)(offset & 0xFCu));
+    return (uint8_t)((v >> ((offset & 3u) * 8u)) & 0xFFu);
+}
+
+uint16_t pci_config_read16(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset)
+{
+    uint32_t v = pci_config_read(bus, slot, func, (uint8_t)(offset & 0xFCu));
+    return (uint16_t)((v >> ((offset & 2u) * 8u)) & 0xFFFFu);
+}
+
+void pci_config_write16(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint16_t value)
+{
+    uint32_t aligned = offset & 0xFCu;
+    uint32_t shift = (offset & 2u) * 8u;
+    uint32_t v = pci_config_read(bus, slot, func, (uint8_t)aligned);
+    v = (v & ~(0xFFFFu << shift)) | ((uint32_t)value << shift);
+    pci_config_write(bus, slot, func, (uint8_t)aligned, v);
+}
+
+uint32_t pci_bar_phys(const pci_device_t *dev, int bar_index)
+{
+    uint32_t bar;
+    if (!dev || bar_index < 0 || bar_index > 5)
+        return 0;
+    bar = dev->bar[bar_index];
+    if (bar & 1u)
+        return pci_bar_addr(bar);
+    /* 64-bit MMIO BAR: require high dword in low 4G for i386 */
+    if (((bar >> 1) & 3u) == 2u) {
+        if (bar_index >= 5)
+            return 0;
+        if (dev->bar[bar_index + 1] != 0)
+            return 0;
+    }
+    return pci_bar_addr(bar);
+}
+
+int pci_enable_bus_master(const pci_device_t *dev)
+{
+    uint16_t cmd;
+    if (!dev)
+        return -1;
+    cmd = pci_config_read16(dev->bus, dev->slot, dev->func, PCI_COMMAND);
+    cmd = (uint16_t)(cmd | PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    pci_config_write16(dev->bus, dev->slot, dev->func, PCI_COMMAND, cmd);
+    return 0;
+}
+
 static void pci_read_device(uint8_t bus, uint8_t slot, uint8_t func, pci_device_t *out)
 {
     uint32_t id = pci_config_read(bus, slot, func, 0x00);
