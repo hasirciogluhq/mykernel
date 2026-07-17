@@ -3,6 +3,7 @@
 #include <kernel/heap.h>
 #include <kernel/string.h>
 #include <kernel/initrd.h>
+#include <kernel/initrd_store.h>
 #include <drivers/vga.h>
 
 #define EI_NIDENT 16
@@ -391,6 +392,7 @@ int modules_load_from_mbi(multiboot_info_t *mbi)
 
         hdr = (const initrd_header_t *)start;
         if (hdr->magic == INITRD_MAGIC) {
+            initrd_store_set(start, sz);
             if (modules_load_initrd(start, sz) < 0)
                 return -1;
             continue;

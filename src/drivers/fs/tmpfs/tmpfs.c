@@ -195,6 +195,16 @@ static int tmpfs_remove(inode_t *dir, dentry_t *dentry, int want_dir)
     return 0;
 }
 
+static int tmpfs_unlink(inode_t *dir, dentry_t *dentry)
+{
+    return tmpfs_remove(dir, dentry, 0);
+}
+
+static int tmpfs_rmdir(inode_t *dir, dentry_t *dentry)
+{
+    return tmpfs_remove(dir, dentry, 1);
+}
+
 static int tmpfs_rename(inode_t *old_dir, dentry_t *old_d,
                         inode_t *new_dir, dentry_t *new_d)
 {
@@ -225,7 +235,7 @@ static int tmpfs_rename(inode_t *old_dir, dentry_t *old_d,
 
 static const inode_operations_t tmpfs_iops = {
     .lookup = tmpfs_lookup, .create = tmpfs_create, .mkdir = tmpfs_mkdir,
-    .unlink = tmpfs_remove, .rmdir = tmpfs_remove, .rename = tmpfs_rename
+    .unlink = tmpfs_unlink, .rmdir = tmpfs_rmdir, .rename = tmpfs_rename
 };
 
 static int tmpfs_mount(file_system_type_t *fs_type, int flags,

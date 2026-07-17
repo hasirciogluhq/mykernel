@@ -340,7 +340,7 @@ static int ahci_init_port(ahci_controller_t *ctrl, uint32_t portno,
 {
     ahci_port_t *port;
     uint32_t ssts;
-    uint64_t capacity;
+    uint64_t capacity = 0;
 
     ssts = mmio_r32(ctrl->abar + 0x100u + portno * 0x80u, PX_SSTS);
     if ((ssts & 0x0Fu) != 3u)
