@@ -35,6 +35,11 @@ inline long write(int fd, const void *buf, size_t count)
     return syscall3(SYS_WRITE, fd, (long)buf, (long)count);
 }
 
+inline long lseek(int fd, long off, int whence)
+{
+    return syscall3(SYS_LSEEK, fd, off, whence);
+}
+
 inline long mkdir(const char *path, int mode = 0755)
 {
     return syscall2(SYS_MKDIR, (long)path, mode);

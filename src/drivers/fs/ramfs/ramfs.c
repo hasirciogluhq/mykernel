@@ -15,6 +15,7 @@
  */
 
 #include <kernel/vfs_api.h>
+#include <kernel/vfs.h>
 #include <kernel/errno.h>
 #include <kernel/heap.h>
 #include <kernel/string.h>
@@ -305,10 +306,25 @@ static int ram_rename(inode_t *old_dir, dentry_t *old_d,
     return 0;
 }
 
+static int ram_open(inode_t *inode, file_t *file)
+{
+    ramfs_node_t *n;
+    if (!inode || !file)
+        return -EINVAL;
+    n = (ramfs_node_t *)inode->i_private;
+    if ((file->f_flags & O_TRUNC) && n && S_ISREG(n->mode)) {
+        n->size = 0;
+        inode->i_size = 0;
+        file->f_pos = 0;
+    }
+    return 0;
+}
+
 static const file_operations_t ram_fops = {
     .read = ram_read,
     .write = ram_write,
     .readdir = ram_readdir,
+    .open = ram_open,
 };
 
 static const inode_operations_t ram_iops = {

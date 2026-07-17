@@ -7,7 +7,8 @@
 
 /*
  * HSRC Terminal — ring-3 shell window (root by default).
- * Builtins: help, clear, pwd, cd, ls, mkdir, cat, touch, echo, whoami, id, uname
+ * Builtins: help, clear, pwd, cd, ls, mkdir, cat, touch, echo, write, whoami, id, uname
+ * Write:  echo hello > file   |  echo more >> file  |  write path text...
  */
 
 namespace {
@@ -154,7 +155,8 @@ const char *cmd_args(const char *s, const char *name)
 
 void cmd_help()
 {
-    line_push("builtins: help clear pwd cd ls mkdir cat touch echo whoami id uname", kDim);
+    line_push("builtins: help clear pwd cd ls mkdir cat touch echo write whoami id uname", kDim);
+    line_push("write:  echo hi > f.txt   |  echo hi >> f.txt   |  write f.txt hi", kDim);
 }
 
 void cmd_ls(const char *arg)
@@ -246,6 +248,91 @@ void cmd_touch(const char *arg)
     hsrc::sdk::close(fd);
 }
 
+/* Write text to path. append=0 truncates; append=1 seeks to end. */
+void cmd_write_file(const char *path, const char *text, int append)
+{
+    int fd;
+    size_t len = 0;
+    int flags = O_WRONLY | O_CREAT;
+    char nl = '\n';
+
+    if (!path || !*path) {
+        line_push("write: missing path", kErr);
+        return;
+    }
+    if (!text)
+        text = "";
+    if (!append)
+        flags |= O_TRUNC;
+
+    fd = (int)hsrc::sdk::open(path, flags);
+    if (fd < 0) {
+        line_push("write: open failed", kErr);
+        return;
+    }
+    if (append && hsrc::sdk::lseek(fd, 0, SEEK_END) < 0) {
+        hsrc::sdk::close(fd);
+        line_push("write: seek failed", kErr);
+        return;
+    }
+
+    while (text[len])
+        len++;
+    if (len > 0 && hsrc::sdk::write(fd, text, len) < 0) {
+        hsrc::sdk::close(fd);
+        line_push("write: failed", kErr);
+        return;
+    }
+    (void)hsrc::sdk::write(fd, &nl, 1);
+    hsrc::sdk::close(fd);
+}
+
+/* Parse "echo ... > path" / "echo ... >> path". Returns 1 if handled. */
+int try_echo_redirect(const char *args)
+{
+    char text[kCols + 1];
+    char path[VFS_PATH_MAX];
+    const char *gt;
+    int append = 0;
+    int ti = 0, pi = 0;
+
+    gt = args;
+    while (*gt && !(*gt == '>' && (gt == args || gt[-1] == ' ' || gt[-1] == '\t')))
+        gt++;
+    if (*gt != '>')
+        return 0;
+    if (gt[1] == '>') {
+        append = 1;
+        /* text is args[0 .. gt) trimmed */
+    }
+
+    /* copy text before > */
+    {
+        const char *end = gt;
+        while (end > args && (end[-1] == ' ' || end[-1] == '\t'))
+            end--;
+        while (args < end && ti < kCols)
+            text[ti++] = *args++;
+        text[ti] = 0;
+    }
+
+    if (append)
+        gt += 2;
+    else
+        gt += 1;
+    gt = skip_ws(gt);
+    if (!*gt) {
+        line_push("echo: missing redirect path", kErr);
+        return 1;
+    }
+    while (*gt && *gt != ' ' && *gt != '\t' && pi < (int)sizeof(path) - 1)
+        path[pi++] = *gt++;
+    path[pi] = 0;
+
+    cmd_write_file(path, text, append);
+    return 1;
+}
+
 void run_line(const char *line)
 {
     const char *s = skip_ws(line);
@@ -317,7 +404,26 @@ void run_line(const char *line)
         return;
     }
     if (cmd_is(s, "echo")) {
-        line_push(cmd_args(s, "echo"), kFg);
+        const char *rest = cmd_args(s, "echo");
+        if (try_echo_redirect(rest))
+            return;
+        line_push(rest, kFg);
+        return;
+    }
+    if (cmd_is(s, "write")) {
+        /* write <path> <text...> */
+        const char *rest = cmd_args(s, "write");
+        char path[VFS_PATH_MAX];
+        int pi = 0;
+        if (!*rest) {
+            line_push("write: usage: write <path> <text>", kErr);
+            return;
+        }
+        while (*rest && *rest != ' ' && *rest != '\t' && pi < (int)sizeof(path) - 1)
+            path[pi++] = *rest++;
+        path[pi] = 0;
+        rest = skip_ws(rest);
+        cmd_write_file(path, rest, 0);
         return;
     }
 
