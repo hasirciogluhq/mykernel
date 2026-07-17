@@ -2,29 +2,7 @@
 #define MYKERNEL_USER_GX_H
 
 #include <kernel/types.h>
-
-/* Base syscalls usable from ring-3 .mke apps */
-#define SYS_EXIT             1
-#define SYS_YIELD            158
-
-/* Graphics / window syscalls (mykernel private range) */
-#define SYS_GX_INFO          200
-#define SYS_GX_PRESENT       201
-#define SYS_WM_CREATE        202
-#define SYS_WM_DESTROY       203
-#define SYS_WM_MAP           204
-#define SYS_WM_MOVE          205
-#define SYS_WM_RESIZE        206
-#define SYS_WM_FOCUS         207
-#define SYS_WM_SHOW          208
-#define SYS_GX_FILL          209
-#define SYS_GX_FILL_ROUND    210
-#define SYS_GX_SET_WALLPAPER 211
-#define SYS_INPUT_STATE      212
-#define SYS_WM_POP_KEY       213
-#define SYS_GX_DAMAGE        214
-#define SYS_WM_GET_FRAME     215
-#define SYS_WM_FIND          216
+#include <kernel/syscall.h>
 
 #define UGX_STYLE_OPAQUE     0
 #define UGX_STYLE_ACRYLIC    (1u << 0)
