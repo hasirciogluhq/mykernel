@@ -47,15 +47,13 @@ static void clamp_pos(void)
         state.y = bound_h - 1;
 }
 
-/* Mild ballistic acceleration so small moves stay precise, flicks travel farther. */
+/* Mild ballistic acceleration — keep fine motion 1:1; only boost large flicks. */
 static int32_t accel_delta(int32_t d)
 {
     int32_t a = d < 0 ? -d : d;
     int32_t mul;
 
-    if (a >= 12)
-        mul = 3;
-    else if (a >= 6)
+    if (a >= 16)
         mul = 2;
     else
         mul = 1;
@@ -117,10 +115,11 @@ void mouse_init(void)
     if (ps2_write_mouse(0xF6) != 0xFA)
         return;
 
-    /* Prefer 8 counts/mm (res=3) and 200Hz; fall back gracefully. */
-    (void)mouse_try_set_res(3);
-    if (mouse_try_set_rate(200) < 0)
-        (void)mouse_try_set_rate(100);
+    /* Prefer 4 counts/mm (res=2) — res=3 felt ultra-fast on QEMU when idle.
+     * 100Hz is enough; 200Hz flooded the poll path under full-frame presents. */
+    (void)mouse_try_set_res(2);
+    if (mouse_try_set_rate(100) < 0)
+        (void)mouse_try_set_rate(80);
 
     if (ps2_write_mouse(0xF4) != 0xFA)
         return;

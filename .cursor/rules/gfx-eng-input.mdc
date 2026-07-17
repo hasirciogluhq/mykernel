@@ -1,0 +1,26 @@
+---
+description: Input, interrupt, and latency rules for graphics stack
+globs: src/drivers/mouse.c,src/drivers/mkdx/**,src/kernel/**,src/user/sdk/**,src/user/apps/**
+alwaysApply: false
+---
+
+# Input / Interrupt / Latency
+
+- **I01** Mouse interrupt içinde render/compose MUST NOT yapılmak. — Gerekçe: ISR süresi mikro-saniye olmalı.
+- **I02** Input hiçbir zaman compose thread’ini beklememelidir. — Gerekçe: input-to-photon latency.
+- **I03** ISR yalnızca event enqueue + wake yapmalı; allocation/lock-heavy iş MUST NOT. — Gerekçe: deadlock/latency.
+- **I04** Mouse event’ler queue üzerinden coalesce edilmeli (son pozisyon yeter); mouse hareketi doğrudan render tetiklememeli; 1000Hz input ≠ 1000 FPS render. — Gerekçe: input rate ile render rate bağımsız; event storm kesilir.
+- **I05** Keyboard repeat/compose ayrı kuyruk politikasına sahip olmalı; pointer kuyruğunu boğmamalı. — Gerekçe: fairness.
+- **I06** Input path’te kernel heap allocation MUST NOT. — Gerekçe: ISR/atomic context safety.
+- **I07** Focus’a göre routing userspace/WM’de; driver tüm app’lere flood MUST NOT. — Gerekçe: gereksiz wake.
+- **I08** Cursor pozisyon güncellemesi present’ten bağımsız uygulanabilmeli. — Gerekçe: hissedilen latency.
+- **I09** Touch/tablet high-rate cihazlarda sampling budget aşımı drop/coalesce MUST. — Gerekçe: kuyruk taşması.
+- **I10** Input timestamp’leri monotonic clock’tan alınmalı. — Gerekçe: frame scheduling korelasyonu.
+- **I11** Userspace input read blocking olsa bile compositor frame üretmeye devam MUST. — Gerekçe: bağımsızlık.
+- **I12** Drag-move sırasında WM geometri update coalesced frame’e hizalanmalı. — Gerekçe: 1:1 IRQ→redraw yasak.
+- **I13** Hit-test sonuç cache’i move sırasında invalidate edilmeli; her pixel için full walk mümkünse kaçınılmalı. — Gerekçe: CPU.
+- **I14** Global grab/capture state net ve tek olmalı; belirsiz double-dispatch MUST NOT. — Gerekçe: correctness.
+- **I15** Input backlog üst sınırı olmalı; sınırsız kuyruk MUST NOT. — Gerekçe: memory/latency blow-up.
+- **I16** Wake-up fırtınası önlemek için event merge window kullanılmalı. — Gerekçe: context switch↓.
+- **I17** Accessibility/high-contrast yolları input hot path’e senkron ağır iş MUST NOT eklemek. — Gerekçe: latency.
+- **I18** Debug input replay production lock sırasını değiştirmemeli. — Gerekçe: Heisenbug önlenir.

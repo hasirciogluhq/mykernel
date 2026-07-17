@@ -1,0 +1,38 @@
+---
+description: Compositor and window manager engineering rules
+globs: src/drivers/mkdx/**,include/gfx/**,include/kernel/mkdx_api.h,src/user/apps/os-ui.cpp,src/user/sdk/**
+alwaysApply: false
+---
+
+# Compositor / Window Manager
+
+- **C01** Compositor uygulama thread’ini bekleyemez. — Gerekçe: bir uygulamanın jank’i tüm desktop’u dondurmamalı.
+- **C02** Userspace hiçbir zaman compositor lock’unu tutamaz. — Gerekçe: priority inversion ve deadlock.
+- **C03** Window move işlemi full-screen redraw tetiklememelidir; mümkünse texture/surface transform ile yapılmalı, içerik yeniden rasterize edilmemeli. — Gerekçe: mevcut surface reuse; sadece etkilenen damage.
+- **C04** Window resize synchronous (UI thread’i bloklayan) yapılmamalıdır. — Gerekçe: latency spike.
+- **C05** Resize sırasında eski buffer ile letterbox/stretch placeholder sergilenebilir; stall MUST NOT. — Gerekçe: responsive feel.
+- **C06** Z-order değişimi yalnızca etkilenen band/region’ı invalidate etmeli. — Gerekçe: minimum compose.
+- **C07** Focus değişimi full redraw MUST NOT zorunlu kılmak. — Gerekçe: decoration damage yeterli olabilir.
+- **C08** Minimize/hide olan surface compose listesinden çıkarılmalı. — Gerekçe: invisible work yasak.
+- **C09** Off-screen (tamamen clip dışı) pencereler compose MUST NOT. — Gerekçe: occlusion.
+- **C10** Compositor frame’i bağımsız clock ile ilerlemeli; app frame pacing’e bağımlı MUST NOT. — Gerekçe: compositor autonomy.
+- **C11** Her surface için son geçerli buffer tutulmalı; app geç kalsa son frame gösterilmeli. — Gerekçe: tear/blank önlenir.
+- **C12** Opacity, transform, clip, mask ve blur compositor seviyesinde uygulanmalı; app content’i bu yüzden yeniden oluşturmamalı; efektler damage sınırında kalmalı. — Gerekçe: surface cache korunur, efekt maliyeti lokal.
+- **C13** Shadow/decoration draw’u app content commit’inden ayrılmalı. — Gerekçe: içerik değişmeden chrome güncellenebilir.
+- **C14** WM geometri update’leri batch’lenmeli; per-pixel move event→compose yasak. — Gerekçe: input coalescing.
+- **C15** Hit-testing compose ile aynı lock altında uzun süre tutulmamalı. — Gerekçe: input latency.
+- **C16** Layer tree mutation’ları frame boundary’de apply edilmeli. — Gerekçe: mid-frame inconsistency.
+- **C17** Compositor MUST NOT app’in shared buffer’ını app yazarken okumak (explicit release/fence). — Gerekçe: race/tear.
+- **C18** Buffer age / fence olmadan reuse MUST NOT. — Gerekçe: undefined pixels.
+- **C19** Multi-window senaryoda worst-case compose süresi budget’lanmalı. — Gerekçe: frame deadline.
+- **C20** Fallback software compose yolu feature-complete ama opt-in/perf-logged olmalı. — Gerekçe: regress görünürlüğü.
+- **C21** Cursor mümkünse ayrı overlay/plane olarak çizilmelidir. — Gerekçe: full compose’dan kaçınır.
+- **C22** Cursor move yalnızca overlay update tetiklemeli; scene recompose MUST NOT. — Gerekçe: mouse rate yüksek.
+- **C23** Hardware cursor yoksa yazılım cursor damage’i minimal rect ile sınırlı MUST. — Gerekçe: küçük dirty.
+- **C24** Modal/dim overlay sadece dim region’ı damage etmeli. — Gerekçe: full-screen dim maliyeti bilinçli olmalı.
+- **C25** Workspace/virtual desktop switch prefetch/cache kullanmalı; soğuk full paint varsayılan MUST NOT. — Gerekçe: switch latency.
+- **C26** App crash/disconnect compositor’ı crash etmemeli; surface retire edilmeli. — Gerekçe: desktop resilience.
+- **C27** Compositor istatistikleri (frame time, missed vsync) düşük maliyetle toplanmalı. — Gerekçe: ölçülebilirlik.
+- **C28** Stacking policy (WM) ile blending (compositor) API sınırından geçmeli; iç içe MUST NOT. — Gerekçe: test edilebilirlik.
+- **C29** Transient popup’lar parent damage ile birleştirilmeli. — Gerekçe: fazla layer thrash önlenir.
+- **C30** Compositor thread önceliği input/ISR’den düşük, app paint’ten ayrı ayarlanmalı. — Gerekçe: latency sınıfları.

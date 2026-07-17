@@ -119,7 +119,7 @@ static int bga_present(const uint32_t *src, uint32_t src_stride_px)
             const uint32_t *srow = src + y * src_stride_px;
             volatile uint32_t *drow = dst + y * dst_stride;
             /* Full-frame blit is long — keep the PS/2 FIFO from overflowing. */
-            if ((y & 15) == 0)
+            if ((y & 7) == 0)
                 ps2_poll();
             for (x = 0; x < g_mode.width; x++)
                 drow[x] = srow[x];
@@ -130,7 +130,7 @@ static int bga_present(const uint32_t *src, uint32_t src_stride_px)
     for (y = 0; y < g_mode.height; y++) {
         const uint32_t *srow = src + y * src_stride_px;
         uint8_t *drow = g_mode.addr + y * g_mode.pitch;
-        if ((y & 15) == 0)
+        if ((y & 7) == 0)
             ps2_poll();
         for (x = 0; x < g_mode.width; x++) {
             uint32_t c = srow[x];

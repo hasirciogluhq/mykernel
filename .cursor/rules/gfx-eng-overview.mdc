@@ -1,0 +1,60 @@
+---
+description: Graphics stack engineering goals and code-review gate for kernel/WM/compositor/SDK
+globs: src/drivers/mkdx/**,src/drivers/display/**,src/drivers/mouse.c,src/kernel/syscall.c,src/user/sdk/**,include/user/sdk/**,include/kernel/mkdx_api.h,include/gfx/**,include/drivers/display.h,src/user/apps/**
+alwaysApply: false
+---
+
+# Graphics Engineering Gate
+
+Bu dosya seti kernel, WM, compositor, graphics API ve userspace SDK için zorunlu mühendislik kurallarıdır. Code review checklist olarak kullanılır.
+
+## Hedefler (öncelik sırası)
+
+1. Maximum FPS
+2. Minimum input-to-photon latency
+3. Minimum syscall / context switch
+4. Minimum memory copy / cache miss / redraw
+5. Tear-free present
+6. Ölçeklenebilir GUI mimarisi
+7. Profesyonel kernel kalitesi (deterministik, kısa kritik yollar)
+
+**Öncelik:** Syscall / context switch / copy / redraw azaltmak, yeni özellik eklemekten daha önemlidir.
+
+## Review kararı
+
+- Bu kurallar ihlal edilemez.
+- Kural ihlali varsa PR/değişiklik reddedilir veya düzeltilmeden merge edilmez.
+- "Geçici" ihlal yalnızca açık TODO + ölçülebilir regresyon planı ile kabul edilir.
+- Performans kaybettiren çözüm yalnızca teknik olarak kaçınılmazsa kabul edilir.
+- Mimari öneri üretmek bu kuralların yerine geçmez; kod bu kurallara uymak zorundadır.
+
+## Feature Gate (zorunlu)
+
+Yeni özellik eklenmeden önce mevcut tasarım şu metriklerle analiz edilmelidir: syscall sayısı, context switch, memory copy, redraw, allocation, cache etkisi, scheduler etkisi, latency, FPS. Daha verimli alternatif araştırılmadan kabul edilmez.
+
+Aşağıdakilerden biri "evet" ise tasarım yeniden değerlendirilmelidir:
+
+1. Daha az syscall ile yapılabilir mi?
+2. Daha az context switch ile yapılabilir mi?
+3. Daha az memory copy ile yapılabilir mi?
+4. Daha az redraw ile yapılabilir mi?
+5. Daha az lock ile yapılabilir mi?
+6. Daha az allocation ile yapılabilir mi?
+7. Daha düşük latency ile yapılabilir mi?
+8. Aynı iş queue ile yapılabilir mi?
+9. Aynı iş batch ile yapılabilir mi?
+10. Aynı iş userspace’te yapılabilir mi?
+
+## Kural dosyaları
+
+- `gfx-eng-boundary.mdc` — sorumluluk sınırları
+- `gfx-eng-syscall.mdc` — syscall, batching, IPC
+- `gfx-eng-pipeline.mdc` — draw, damage, present, buffer
+- `gfx-eng-compositor.mdc` — compositor / WM
+- `gfx-eng-input.mdc` — input, interrupt, latency
+- `gfx-eng-memory.mdc` — bellek, lock, allocation
+- `gfx-eng-timing.mdc` — frame scheduler, vsync, resize/move
+
+## Biçim
+
+Her kural: `MUST` / `MUST NOT` + tek cümle teknik gerekçe. Yoruma açık ifadeler yasaktır.

@@ -1,0 +1,28 @@
+---
+description: Kernel vs userspace vs GPU responsibility boundaries for graphics
+globs: src/drivers/mkdx/**,src/drivers/display/**,src/kernel/**,src/user/sdk/**,include/user/sdk/**,include/kernel/mkdx_api.h,include/gfx/**
+alwaysApply: false
+---
+
+# Responsibility Boundaries
+
+- **B01** Kernel MUST NOT yüksek seviyeli GUI çizim motoruna dönüşmek; uygulama çizim mantığını (shape, text layout, widget paint) yürütmemek. — Gerekçe: kritik yolu kısa tutar, FPS ve isolation sağlar.
+- **B02** Kernel MUST yalnızca şunları yapmak: window/surface yönetimi, güvenlik, scheduling, present koordinasyonu; piksel/UI üretimi userspace veya compositor’da kalmak. — Gerekçe: sorumluluk sınırı.
+- **B03** Piksel üretimi MUST userspace SDK veya GPU yolunda tamamlanmak. — Gerekçe: draw maliyeti kernel’e sızmamalı.
+- **B04** Font rasterization MUST NOT kernel içinde yapılmak. — Gerekçe: CPU yoğun iş syscall süresini şişirir.
+- **B05** Text shaping / glyph cache MUST userspace’te tutulmak. — Gerekçe: cache locality uygulama sürecinde daha iyidir.
+- **B06** Image decode (PNG/JPEG/BMP parse) MUST NOT kernel present yolunda yapılmak. — Gerekçe: decode latency frame deadline’ını bozar.
+- **B07** Widget/layout hesapları MUST NOT compositor veya kernel’de yapılmak. — Gerekçe: WM sadece pencere geometrisi yönetir.
+- **B08** Kernel MUST front buffer’a uygulama adına doğrudan yazmamak (cursor overlay hariç, kurallı yol). — Gerekçe: tear ve race önlenir.
+- **B09** Userspace MUST NOT kernel iç yapı pointer’larına erişmek. — Gerekçe: ABI ve memory safety.
+- **B10** Graphics ABI değişiklikleri MUST versioned ve geriye dönük uyumlu veya açık migration ile yapılmak. — Gerekçe: uygulama kırılması önlenir.
+- **B11** Display driver MUST sadece scanout/present ve mode-set sağlamak; UI çizmemek. — Gerekçe: driver sınırını korur.
+- **B12** MKDX/compositor MUST uygulama paint kodunu çağırmamak / beklememek; kernel app’i, app de kernel render’ını beklememek. — Gerekçe: karşılıklı non-blocking; dead-lock ve jank önlenir.
+- **B13** GPU/accel yolu varsa blit/compose MUST mümkün olduğunca GPU’da bitmek. — Gerekçe: CPU bandwidth ve cache miss azalır.
+- **B14** Kernel MUST NOT userspace heap allocator semantiğini taklit etmek (malloc-benzeri grow in render path). — Gerekçe: deterministik latency.
+- **B15** Debug/overlay çizimi MUST production hot path’i bozmayacak şekilde kapalı kalabilmek. — Gerekçe: ölçüm bias ve FPS regresyonu önlenir.
+- **B16** Policy (focus, stacking) MUST WM katmanında; pixel blend MUST compositor katmanında ayrılmak. — Gerekçe: sorumluluk ayrımı.
+- **B17** Syscall handler MUST işi kuyruğa bırakıp hızlı dönmek; uzun işi inline tamamlamamak. — Gerekçe: scheduler latency.
+- **B18** Userspace SDK MUST kernel’e “nasıl çizileceğini” değil “ne commit edileceğini” iletmek. — Gerekçe: deklaratif commit modeli.
+- **B19** Kernel MUST NOT tema/renk/skin kararları vermek. — Gerekçe: politika userspace’tedir.
+- **B20** Her yeni grafik özelliği MUST hangi katmanda yaşayacağını (SDK / WM / compositor / driver) açıkça seçmek. — Gerekçe: sınır ihlali engellenir.

@@ -1,7 +1,11 @@
 # Host tools, disk image, initrd
 
 ENV_ASSET := $(BUILD)/environment
-INITRD_ASSETS := assets/wallpaper-default.bmp $(ENV_ASSET)
+# Desktop wallpaper for mkdx (BMP; decoded by load_default_wallpaper).
+# Source art: assets/os/default-wallpaper.png — regenerate with:
+#   magick assets/os/default-wallpaper.png -resize '1280x720^' -gravity center \
+#     -extent 1280x720 -type TrueColor BMP3:assets/os/wallpaper-default.bmp
+INITRD_ASSETS := assets/os/wallpaper-default.bmp $(ENV_ASSET)
 
 $(PACKER): tools/pack_initrd.c
 	@mkdir -p $(dir $@)

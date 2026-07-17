@@ -32,7 +32,7 @@ constexpr int kContentX = kSidebarW + 24;
 constexpr int kContentW = kWinW - kContentX - 24;
 constexpr int kRowsStartY = 92;
 
-constexpr int kThemePollEvery = 32;
+constexpr int kThemePollEvery = 96;
 
 constexpr const char *kIniDir = "/etc";
 constexpr const char *kIniPath = "/etc/os-settings.ini";

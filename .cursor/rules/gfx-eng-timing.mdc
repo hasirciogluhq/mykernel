@@ -1,0 +1,29 @@
+---
+description: Frame scheduler, vsync, resize/move, and timing rules
+globs: src/drivers/mkdx/**,src/drivers/display/**,src/user/sdk/**,include/user/sdk/**,include/kernel/mkdx_api.h
+alwaysApply: false
+---
+
+# Frame Timing / Scheduler / Geometry
+
+- **T01** Frame timing ve present yalnızca Frame Scheduler tarafından kontrol edilmelidir; render yalnızca scheduler izin verdiğinde çalışmalı. — Gerekçe: tek pace-maker; input rate ≠ frame rate.
+- **T01b** Render thread input thread’i beklememeli; input thread compositor’u bloke etmemeli; gereksiz wake-up tasarımı MUST NOT. — Gerekçe: bağımsız latency sınıfları.
+- **T02** App’ler vsync’i busy-wait ile beklememeli; event/fence MUST. — Gerekçe: CPU waste.
+- **T03** Missed deadline’da work drop/degrade politikası tanımlı olmalı; unbounded catch-up MUST NOT. — Gerekçe: latency spiral.
+- **T04** Animation clock ile input clock ayrılabilmeli. — Gerekçe: stutter vs responsiveness tradeoff.
+- **T05** Per-window requestAnimationFrame benzeri sinyal coalesced olmalı. — Gerekçe: wake storms.
+- **T06** Display mode-set present hot path dışında ve nadiren yapılmalı. — Gerekçe: mode-set pahalı.
+- **T07** Frame start’ta damage yoksa idle’a düşülmeli; boş compose MUST NOT. — Gerekçe: power/FPS headroom.
+- **T08** Predicted frame time ölçülmeli; budget aşımında efekt degrade (blur off vb.) yapılabilir. — Gerekçe: adaptive quality.
+- **T09** Resize commit’leri frame boundary’de apply edilmeli. — Gerekçe: mid-frame geometry tear.
+- **T10** Move sırasında buffer yeniden allocate MUST NOT. — Gerekçe: move ≠ realloc.
+- **T11** Maximize/fullscreen transition damage’i net rect set ile sınırlı olmalı. — Gerekçe: animasyon maliyeti.
+- **T12** Multi-monitor present’ler bağımsız schedule edilebilmeli (mümkünse). — Gerekçe: ölçeklenebilirlik.
+- **T13** Timestamp + frame id her present’te artmalı; rewind MUST NOT. — Gerekçe: sync correctness.
+- **T14** Userspace “present now” spam’i scheduler tarafından rate-limit edilmeli. — Gerekçe: thrash önlenir.
+- **T15** Blocking sleep render thread içinde deadline hesabını bozacak şekilde MUST NOT. — Gerekçe: timing drift.
+- **T16** Power-save (DPMS) dönüşünde tek temiz full refresh serbest; sonrasında damage modeli geri gelmeli. — Gerekçe: recovery.
+- **T17** Frame Scheduler istatistikleri userspace’e read-only export edilebilir; kontrol channel’ı ayrı MUST. — Gerekçe: privilege.
+- **T18** Startup/warm-up alloc’ları ilk frame deadline’ından önce tamamlanmalı. — Gerekçe: first-frame jank.
+- **T19** Teardown sırasında yeni present kabul edilmemeli; in-flight fences drain edilmeli. — Gerekçe: UAF.
+- **T20** Latency hedefleri (input→cursor, app→pixel) için ayrı bütçe tanımlanmalı. — Gerekçe: ölçülebilir SLO.

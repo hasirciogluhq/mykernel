@@ -1,0 +1,39 @@
+---
+description: Draw, damage, present, and buffer pipeline engineering rules
+globs: src/drivers/mkdx/**,src/drivers/display/**,src/user/sdk/**,include/user/sdk/gfx.hpp,include/drivers/display.h,include/gfx/**
+alwaysApply: false
+---
+
+# Draw / Damage / Present / Buffers
+
+- **P01** Draw işlemleri mümkün olduğunca userspace’te tamamlanmalı. — Gerekçe: kernel yalnızca commit görür.
+- **P02** Bir frame için mümkün olan en fazla bir present MUST hedeflenmek. — Gerekçe: display bandwidth sınırı.
+- **P03** Front buffer’a doğrudan yazmak MUST NOT. — Gerekçe: tear-free garanti bozulur.
+- **P04** Present MUST back buffer (veya eşdeğeri) üzerinden yapılmak. — Gerekçe: atomik flip/blit.
+- **P05** Damage olmayan region tekrar çizilmemeli / compose edilmemeli. — Gerekçe: minimum redraw.
+- **P06** Full-screen clear+redraw varsayılan yol MUST NOT olmak. — Gerekçe: cache ve bandwidth israfı.
+- **P07** Damage rect’ler MUST birleştirilerek (merge/coalesce) iletilmek. — Gerekçe: aşırı fragmentasyon pahalıdır.
+- **P08** Aynı surface aynı frame içinde ikinci kez compose MUST NOT. — Gerekçe: duplicate work.
+- **P09** Gereksiz memory copy yasaktır; share/map/handle tercih MUST. — Gerekçe: bandwidth = FPS düşmanı.
+- **P10** Buffer format dönüşümü present hot path’te MUST NOT yapılmak. — Gerekçe: per-pixel tax.
+- **P11** Stride/pitch uyumsuzlukları allocate zamanında çözülmeli; present’te fixup MUST NOT. — Gerekçe: hot path sade.
+- **P12** Alpha blend yalnızca gerekli dirty bölgede MUST çalışmak. — Gerekçe: overdraw maliyeti.
+- **P13** Opaque region’lar MUST alttaki katmanları skip ettirmek. — Gerekçe: occlusion culling.
+- **P14** Scissor/clip dışı draw CPU’da bile üretilmemeli (SDK tarafında). — Gerekçe: wasted fill rate.
+- **P15** Double buffering MUST minimum gereksinim olmak; triple buffering desteklenebiliyorsa tercih edilmeli; politika Frame Scheduler ile uyumlu MUST. — Gerekçe: tear-free + stall vs latency dengesi.
+- **P15b** Aynı frame birden fazla kez kopyalanmamalı; present yolu tek net transfer/flip ile bitmeli. — Gerekçe: bandwidth israfı FPS yer.
+- **P16** Present yolu tear-free olmalı; vsync veya atomik flip olmadan tearing kabul MUST NOT. — Gerekçe: görsel kalite.
+- **P17** Partial present (`present_rect`) destekleniyorsa full present yerine MUST kullanılmak. — Gerekçe: minimum scanout traffic.
+- **P18** Surface buffer’ları page-aligned ve cache-policy bilinçli allocate MUST. — Gerekçe: DMA/cache coherency.
+- **P19** Readback (GPU→CPU) UI animasyon hot path’inde MUST NOT. — Gerekçe: sync bubble.
+- **P20** CPU blit yolları SIMD/satır-kopya dostu olmalı; byte-byte loop MUST NOT. — Gerekçe: cache line kullanımı.
+- **P21** Framebuffer pointer userspace’e raw olarak sızdırılmamalı; map API MUST. — Gerekçe: lifetime safety.
+- **P22** Swap/flip sonrası eski back buffer’a yazmak MUST NOT (retire edilmeden). — Gerekçe: use-after-flip.
+- **P23** Clear rengi bile damage dışı bölgeye yazılmamalı. — Gerekçe: false damage yaratır.
+- **P24** Wallpaper/static katman cache’lenmeli; her frame yeniden decode/scale MUST NOT. — Gerekçe: sabit maliyet.
+- **P25** Scaling/filtering resize commit dışında hot present’te MUST NOT tekrarlanmak. — Gerekçe: amortized cost.
+- **P26** SDK draw komutları frame sonuna kadar userspace ring’de birikmeli. — Gerekçe: tek commit.
+- **P27** Present başarısız olursa state MUST tutarlı rollback/retry semantiği ile kalmak. — Gerekçe: stuck UI önlenir.
+- **P28** Color conversion (sRGB/linear) present yerine content create zamanında dağıtılmalı. — Gerekçe: per-frame tax kesilir.
+- **P29** Overdraw budget aşıldığında layer merge/redirect stratejisi MUST devreye girmek. — Gerekçe: ölçeklenebilirlik.
+- **P30** Screenshot/capture yolu normal present yolunu stall etmemeli (async copy). — Gerekçe: FPS regresyonu önlenir.

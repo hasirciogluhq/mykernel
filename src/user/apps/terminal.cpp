@@ -38,7 +38,7 @@ constexpr int kLineH = 20; /* matches UGX_FONT_H (18) + 2px leading */
 constexpr int kCols = 86;
 constexpr int kRows = 32;
 constexpr int kHist = 120;
-constexpr int kThemePollEvery = 32;
+constexpr int kThemePollEvery = 96;
 
 Window g_win;
 WindowOptions g_win_opts;

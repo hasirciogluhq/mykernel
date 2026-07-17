@@ -940,8 +940,15 @@ static long do_gx_set_wallpaper(long argp)
         return -1;
     if (copy_from_user(&args, (const void *)argp, sizeof(args)) < 0)
         return -1;
-    if (!args.pixels || args.width == 0 || args.height == 0)
-        return -1;
+
+    /* NULL / zero size => load baked default wallpaper from initrd. */
+    if (!args.pixels || args.width == 0 || args.height == 0) {
+        kargs.pixels = NULL;
+        kargs.width = 0;
+        kargs.height = 0;
+        kargs.stride = 0;
+        return api->set_wallpaper(&kargs);
+    }
 
     npix = (size_t)args.width * (size_t)args.height;
     if (npix > sizeof(pixels) / sizeof(pixels[0]))

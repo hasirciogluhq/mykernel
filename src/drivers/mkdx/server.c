@@ -250,6 +250,41 @@ gx_server *gx_server_get(void)
     return g_server.ready ? &g_server : NULL;
 }
 
+static void present_frame_banded(gx_server *s, display_ops_t *ops,
+                                 gx_surface *bb, int32_t *mx, int32_t *my)
+{
+    const uint32_t band_h = 48;
+    uint32_t y;
+    const mouse_state_t *ms;
+
+    if (!ops->present_rect) {
+        g_present_busy = 1;
+        ops->present(bb->pixels, bb->stride);
+        g_present_busy = 0;
+        return;
+    }
+
+    /* Present in horizontal bands; between bands drain PS/2 and move cursor
+     * so a dirty full-frame blit cannot freeze the pointer for the whole copy. */
+    for (y = 0; y < bb->height; y += band_h) {
+        uint32_t h = band_h;
+        if (y + h > bb->height)
+            h = bb->height - y;
+
+        g_present_busy = 1;
+        ops->present_rect(bb->pixels, bb->stride, 0, y, bb->width, h);
+        g_present_busy = 0;
+
+        gx_server_poll_input();
+        ms = mouse_get();
+        if (ms && (ms->x != *mx || ms->y != *my)) {
+            flush_cursor_at(s, ms->x, ms->y);
+            *mx = ms->x;
+            *my = ms->y;
+        }
+    }
+}
+
 void gx_server_present(void)
 {
     gx_server *s = gx_server_get();
@@ -285,7 +320,7 @@ void gx_server_present(void)
         g_present_busy = 0;
 
         /* Compose can take a long time — drain PS/2 and take latest pointer. */
-        drivers_poll();
+        gx_server_poll_input();
         ms = mouse_get();
         mx = ms ? ms->x : 0;
         my = ms ? ms->y : 0;
@@ -330,16 +365,14 @@ void gx_server_present(void)
                (size_t)scene->stride * scene->height * sizeof(gx_color));
 
         draw_cursor_on_bb(s, mx, my);
-        g_present_busy = 1;
-        ops->present(bb->pixels, bb->stride);
-        g_present_busy = 0;
+        present_frame_banded(s, ops, bb, &mx, &my);
 
         s->cursor_x = mx;
         s->cursor_y = my;
         s->dirty = 0;
 
-        /* Full blit is slow — apply any motion that arrived during present. */
-        drivers_poll();
+        /* Apply any motion that arrived on the last band. */
+        gx_server_poll_input();
         ms = mouse_get();
         if (ms)
             flush_cursor_at(s, ms->x, ms->y);

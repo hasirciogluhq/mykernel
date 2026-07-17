@@ -40,7 +40,7 @@ constexpr int kRefreshEvery = 24;
 constexpr int kMaxEntries = hsrc::sdk::process::kMaxProcesses;
 constexpr int kStatusChars = 128;
 
-constexpr int kThemePollEvery = 32;
+constexpr int kThemePollEvery = 96;
 
 struct MonitorEntry {
     ProcListEntry proc{};

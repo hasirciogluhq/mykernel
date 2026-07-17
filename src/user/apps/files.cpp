@@ -36,7 +36,7 @@ constexpr int kShortcutTop = kChromeTitleH + 88;
 constexpr int kFooterBtnW = 72;
 constexpr int kMaxEntries = 96;
 constexpr int kStatusChars = 120;
-constexpr int kThemePollEvery = 32;
+constexpr int kThemePollEvery = 96;
 
 struct Entry {
     char name[64];

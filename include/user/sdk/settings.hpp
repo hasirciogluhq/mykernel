@@ -51,7 +51,7 @@ Appearance appearance();
 ThemeMode theme_mode();
 const AppTheme &theme();
 
-/* Re-read /etc/os-settings.ini. Returns true if ThemeMode changed. */
+/* Re-read /etc/os-settings.ini (throttled + cached). Returns true if theme changed. */
 bool refresh_theme();
 
 } // namespace hsrc::sdk::settings

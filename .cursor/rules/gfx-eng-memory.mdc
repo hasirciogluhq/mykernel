@@ -1,0 +1,31 @@
+---
+description: Memory, locking, and allocation rules for render paths
+globs: src/drivers/mkdx/**,src/drivers/display/**,src/kernel/**,src/user/sdk/**
+alwaysApply: false
+---
+
+# Memory / Locks / Allocation
+
+- **M01** Kernel render/compose sırasında heap allocation MUST NOT. — Gerekçe: deterministik frame time.
+- **M02** Render pipeline içinde blocking lock MUST NOT; büyük global lock tasarımı MUST NOT. — Gerekçe: priority inversion / missed vsync.
+- **M03** Spinlock yalnızca çok kısa kritik bölgelerde; aksi halde event/fence/queue tercih MUST; try-lock + defer serbest. — Gerekçe: worst-case latency.
+- **M03b** Her frame malloc/free MUST NOT; buffer’lar pool/reuse ile dönmeli. — Gerekçe: allocation jitter kabul edilmez.
+- **M04** Shared surface mapping refcount’lu olmalı; use-after-unmap MUST NOT. — Gerekçe: memory safety.
+- **M05** Buffer pool / slab önceden reserve edilmeli; frame ortası grow MUST NOT. — Gerekçe: allocation jitter.
+- **M06** Cache-line false sharing hot counter’larda önlenmeli (padding/ayrı cache line). — Gerekçe: cache miss↓.
+- **M07** Büyük framebuffer’larda rastgele erişim yerine scanline-order tercih MUST. — Gerekçe: prefetch dostu.
+- **M08** Gereksiz userspace↔kernel copy yasak; validate-in-place / TOCTOU-safe map MUST. — Gerekçe: bandwidth.
+- **M09** Temporary scratch buffer’lar thread-local/prealloc olmalı. — Gerekçe: allocator contention.
+- **M10** DMA buffer’larda CPU cache maintenance bilinçli ve minimal MUST. — Gerekçe: coherency tax.
+- **M11** Fragmentasyon yaratan sık small alloc/free render path’te MUST NOT. — Gerekçe: uzun vadeli jitter.
+- **M12** Lock sırası global dokümante; yeni lock eklerken cycle MUST NOT. — Gerekçe: deadlock.
+- **M13** Reader-writer veya RCU-benzeri read-mostly yapılar stacking read’leri için tercih edilmeli. — Gerekçe: scale.
+- **M14** Panic/OOM anında partial frame corrupt leave MUST NOT; last-good frame korunmalı. — Gerekçe: resilience.
+- **M15** Secrets/credentials framebuffer’a yazılırsa free sonrası scrub politikası uygulanmalı. — Gerekçe: güvenlik.
+- **M16** Userspace pointer’ları kernel’de saklanıp async kullanılmamalı (handle kullan). — Gerekçe: lifetime.
+- **M17** mmap/shared region boyutları max limit’e tabi MUST. — Gerekçe: resource DoS.
+- **M18** Atomic state (width/height/seq) tek word/seqlock ile yayınlanmalı. — Gerekçe: torn read önlenir.
+- **M19** Memory barrier’lar fence/protocol noktalarında bilinçli konmalı; “her yere barrier” MUST NOT. — Gerekçe: maliyet.
+- **M20** Leak’ler surface destroy path’inde audit edilmeli; id reuse use-after-free yaratmamalı. — Gerekçe: güvenlik.
+- **M21** Hot path’te page fault’a yol açacak lazy alloc stratejisi MUST NOT. — Gerekçe: fault = frame miss.
+- **M22** Compositor scratch ve app buffers aynı arena’yı kilitsiz paylaşmamalı. — Gerekçe: isolation.

@@ -30,6 +30,13 @@ using hsrc::sdk::settings::ThemeMode;
 Appearance g_appearance = Appearance::Light;
 ThemeMode g_theme_mode = ThemeMode::Light;
 bool g_theme_loaded = false;
+/* True once /etc/os-settings.ini exists (or we created the default). */
+bool g_ini_present = false;
+/* Skip re-open storms while the ini is known-missing. */
+unsigned g_absent_skip = 0;
+constexpr unsigned kAbsentRetryEvery = 256; /* refresh_theme calls while missing */
+constexpr const char *kDefaultIni =
+    "general.appearance=Light\n";
 
 constexpr AppTheme kLightTheme = {
     rgb(255, 255, 255),          /* bg */
@@ -100,18 +107,31 @@ Appearance parse_appearance_value(const char *value)
     return Appearance::Light;
 }
 
-Appearance read_appearance_from_ini()
+/* status: 1 = read ok, 0 = missing/empty (use default), -1 = other error */
+Appearance read_appearance_from_ini(int *status)
 {
+    if (status)
+        *status = 0;
+
     int fd = (int)hsrc::sdk::open(kIniPath, O_RDONLY);
-    if (fd < 0)
+    if (fd < 0) {
+        if (status)
+            *status = 0; /* treat as absent — expected before first Settings save */
         return Appearance::Light;
+    }
 
     char buf[kIniBytes];
     memset(buf, 0, sizeof(buf));
     long nread = hsrc::sdk::read(fd, buf, sizeof(buf) - 1);
     (void)hsrc::sdk::close(fd);
-    if (nread <= 0)
+    if (nread <= 0) {
+        if (status)
+            *status = 0;
         return Appearance::Light;
+    }
+
+    if (status)
+        *status = 1;
 
     int start = 0;
     for (long i = 0; i <= nread; i++) {
@@ -136,13 +156,51 @@ Appearance read_appearance_from_ini()
     return Appearance::Light;
 }
 
+bool ensure_default_ini()
+{
+    (void)hsrc::sdk::mkdir("/etc", 0755);
+    int fd = (int)hsrc::sdk::open(kIniPath, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0)
+        return false;
+    const size_t len = strlen(kDefaultIni);
+    long wrote = hsrc::sdk::write(fd, kDefaultIni, len);
+    (void)hsrc::sdk::close(fd);
+    if (wrote == (long)len) {
+        g_ini_present = true;
+        return true;
+    }
+    return false;
+}
+
+void apply_theme(Appearance appearance)
+{
+    g_appearance = appearance;
+    g_theme_mode = resolve_mode(appearance);
+    g_theme_loaded = true;
+}
+
+void load_theme_from_disk(bool create_if_missing)
+{
+    int status = 0;
+    Appearance next = read_appearance_from_ini(&status);
+    if (status == 1) {
+        g_ini_present = true;
+        apply_theme(next);
+        return;
+    }
+    /* Missing/empty: keep Light defaults and optionally seed the file once. */
+    apply_theme(Appearance::Light);
+    if (create_if_missing && ensure_default_ini())
+        g_ini_present = true;
+    else
+        g_ini_present = false;
+}
+
 void ensure_theme_loaded()
 {
     if (g_theme_loaded)
         return;
-    g_appearance = read_appearance_from_ini();
-    g_theme_mode = resolve_mode(g_appearance);
-    g_theme_loaded = true;
+    load_theme_from_disk(true);
 }
 
 void copy_text(char *dst, size_t dst_size, const char *src)
@@ -276,13 +334,33 @@ const AppTheme &theme()
 
 bool refresh_theme()
 {
-    Appearance next_appearance = read_appearance_from_ini();
-    ThemeMode next_mode = resolve_mode(next_appearance);
-    bool changed = !g_theme_loaded || next_mode != g_theme_mode || next_appearance != g_appearance;
-    g_appearance = next_appearance;
-    g_theme_mode = next_mode;
-    g_theme_loaded = true;
-    return changed;
+    /*
+     * Apps poll this from their frame loops. A missing /etc/os-settings.ini
+     * used to be re-opened every few yields → VFS + serial spam starved input.
+     * Seed a default file once; while still absent, negative-cache hard.
+     * When the file exists, each explicit refresh_theme() re-reads (callers
+     * already throttle via kThemePollEvery).
+     */
+    if (!g_theme_loaded) {
+        load_theme_from_disk(true);
+        g_absent_skip = 0;
+        return true;
+    }
+
+    if (!g_ini_present) {
+        if (g_absent_skip + 1 < kAbsentRetryEvery) {
+            g_absent_skip++;
+            return false;
+        }
+        g_absent_skip = 0;
+    }
+
+    Appearance prev_appearance = g_appearance;
+    ThemeMode prev_mode = g_theme_mode;
+    load_theme_from_disk(!g_ini_present);
+    if (g_ini_present)
+        g_absent_skip = 0;
+    return prev_mode != g_theme_mode || prev_appearance != g_appearance;
 }
 
 } // namespace hsrc::sdk::settings

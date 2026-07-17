@@ -3,6 +3,7 @@
 #include <kernel/string.h>
 #include <drivers/ps2.h>
 #include "compositor.h"
+#include "server.h"
 
 static int alloc_slot(gx_compositor *c)
 {
@@ -255,6 +256,9 @@ static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity)
         if (sy < 0 || (uint32_t)sy >= bb->height || (uint32_t)y >= src->height)
             continue;
 
+        if ((y & 31) == 0)
+            ps2_poll();
+
         if (rad > 0) {
             blit_round_row(bb, r.x, sy, src, y, y, r.w, r.h, rad, opacity);
             continue;
@@ -300,7 +304,7 @@ static void paint_acrylic(gx_compositor *c, gx_surface *bb, gx_layer *L)
                 continue;
 
             /* Keep PS/2 drained during per-pixel acrylic work. */
-            if ((y & 31) == 0)
+            if ((y & 15) == 0)
                 ps2_poll();
 
             int32_t x0, x1;
@@ -374,7 +378,8 @@ void gx_compositor_compose(gx_compositor *c)
 
     for (int i = 0; i < n; i++) {
         gx_layer *L = &c->layers[ids[i]];
-        ps2_poll();
+        /* Drain mouse/keyboard between layers so compose doesn't starve input. */
+        gx_server_poll_input();
         switch (L->style) {
         case GX_LAYER_ACRYLIC:
             paint_acrylic(c, bb, L);
