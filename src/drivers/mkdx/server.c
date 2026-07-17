@@ -29,6 +29,10 @@ static int32_t g_deferred_mx, g_deferred_my;
 static int g_deferred_btn;
 static uint8_t g_deferred_btn_code;
 static int32_t g_deferred_btn_x, g_deferred_btn_y;
+/* Drag damage as two rects — never the fat old∪new bbox (that was the hitch). */
+static int g_drag_damage;
+static gx_rect g_drag_old;
+static gx_rect g_drag_new;
 
 /* Classic arrow — 0 empty, 1 outline, 2 fill */
 static const uint8_t cursor_mask[CURSOR_H][CURSOR_W] = {
@@ -216,6 +220,26 @@ void gx_server_mark_dirty_rect(gx_rect r)
             g_server.dirty_full = 1;
     }
 
+    g_server.dirty = 1;
+}
+
+void gx_server_mark_drag_move(gx_rect old_r, gx_rect new_r)
+{
+    gx_rect screen;
+
+    if (!g_server.ready)
+        return;
+
+    screen = gx_rect_make(0, 0, (int32_t)g_server.device.mode.width,
+                          (int32_t)g_server.device.mode.height);
+    old_r = gx_rect_intersect(old_r, screen);
+    new_r = gx_rect_intersect(new_r, screen);
+
+    /* Keep earliest unrestored old + latest dest — never union into dirty_rect. */
+    if (!g_drag_damage)
+        g_drag_old = old_r;
+    g_drag_new = new_r;
+    g_drag_damage = 1;
     g_server.dirty = 1;
 }
 
@@ -423,6 +447,80 @@ static void present_full_frame(gx_server *s, display_ops_t *ops,
 }
 
 /*
+ * Live drag: compose old + new as two window-sized rects (not their bbox).
+ * Cursor path stays identical to the normal tick — pump_input is untouched.
+ */
+static int frame_tick_drag(gx_server *s, display_ops_t *ops)
+{
+    const mouse_state_t *ms;
+    gx_surface *bb = s->device.backbuffer;
+    gx_rect old_r = g_drag_old;
+    gx_rect new_r = g_drag_new;
+    int32_t mx, my;
+
+    if (!bb || !ops)
+        return -1;
+
+    g_drag_damage = 0;
+    if (!s->dirty_full && gx_rect_empty(s->dirty_rect))
+        s->dirty = 0;
+
+    ms = mouse_get();
+    mx = ms ? ms->x : 0;
+    my = ms ? ms->y : 0;
+
+    g_frame_busy = 1;
+
+    if (!gx_rect_empty(old_r))
+        gx_compositor_compose_rect(&s->comp, bb, old_r);
+    if (!gx_rect_empty(new_r))
+        gx_compositor_compose_rect(&s->comp, bb, new_r);
+
+    gx_server_poll_input();
+    ms = mouse_get();
+    mx = ms ? ms->x : 0;
+    my = ms ? ms->y : 0;
+
+    if (s->cursor_x >= 0 && s->cursor_y >= 0 &&
+        (s->cursor_x != mx || s->cursor_y != my))
+        compose_rect_to_bb(s, s->cursor_x, s->cursor_y, CURSOR_W, CURSOR_H);
+    draw_cursor_on_bb(s, mx, my);
+
+    if (!gx_rect_empty(old_r))
+        present_rect(s, old_r.x, old_r.y, old_r.w, old_r.h);
+    if (!gx_rect_empty(new_r) &&
+        !(new_r.x == old_r.x && new_r.y == old_r.y &&
+          new_r.w == old_r.w && new_r.h == old_r.h))
+        present_rect(s, new_r.x, new_r.y, new_r.w, new_r.h);
+
+    /* Cursor present separately so we never skip flush_cursor / pump path. */
+    present_rect(s, mx, my, CURSOR_W, CURSOR_H);
+
+    s->cursor_x = mx;
+    s->cursor_y = my;
+    s->frame_seq++;
+
+    g_frame_busy = 0;
+
+    flush_deferred_btn(s);
+    flush_deferred_move(s);
+    end_drag_if_released(s);
+    merge_pending_into_dirty(s);
+
+    if (s->wm.drag_id >= 0 && (s->dirty || g_drag_damage) && g_tick_depth <= 3) {
+        int r = gx_server_frame_tick();
+        return r;
+    }
+
+    gx_server_poll_input();
+    ms = mouse_get();
+    if (ms)
+        flush_cursor_at(s, ms->x, ms->y);
+
+    return 0;
+}
+
+/*
  * Independent frame clock (C10/T01): compose+scanout when dirty.
  * Called from present syscall and from yield (via pump) so apps that skip
  * present still get WM move/focus damage painted.
@@ -436,6 +534,7 @@ int gx_server_frame_tick(void)
     gx_surface *bb;
     gx_rect damage;
     int full;
+    int r;
 
     if (!s)
         return -1;
@@ -452,6 +551,20 @@ int gx_server_frame_tick(void)
         return -1;
     }
 
+    /* Split drag path — mouse/cursor polling stays on the normal path. */
+    if (g_drag_damage && s->wm.drag_id >= 0) {
+        r = frame_tick_drag(s, ops);
+        g_tick_depth--;
+        return r;
+    }
+
+    /* Drag ended with leftover split damage — fold into normal dirty. */
+    if (g_drag_damage) {
+        gx_server_mark_dirty_rect(g_drag_old);
+        gx_server_mark_dirty_rect(g_drag_new);
+        g_drag_damage = 0;
+    }
+
     if (!s->dirty) {
         gx_server_poll_input();
         ms = mouse_get();
@@ -461,8 +574,8 @@ int gx_server_frame_tick(void)
         flush_deferred_btn(s);
         flush_deferred_move(s);
         merge_pending_into_dirty(s);
-        if (s->wm.drag_id >= 0 && s->dirty && g_tick_depth <= 3) {
-            int r = gx_server_frame_tick();
+        if (s->wm.drag_id >= 0 && (s->dirty || g_drag_damage) && g_tick_depth <= 3) {
+            r = gx_server_frame_tick();
             g_tick_depth--;
             return r;
         }
@@ -579,8 +692,8 @@ int gx_server_frame_tick(void)
     merge_pending_into_dirty(s);
 
     /* Catch pointer hops that arrived mid-compose so drag stays glued. */
-    if (s->wm.drag_id >= 0 && s->dirty && g_tick_depth <= 3) {
-        int r = gx_server_frame_tick();
+    if (s->wm.drag_id >= 0 && (s->dirty || g_drag_damage) && g_tick_depth <= 3) {
+        r = gx_server_frame_tick();
         g_tick_depth--;
         return r;
     }

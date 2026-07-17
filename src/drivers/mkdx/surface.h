@@ -28,6 +28,13 @@ static inline int gx_rect_empty(gx_rect r)
     return r.w <= 0 || r.h <= 0;
 }
 
+static inline int gx_rect_contains(gx_rect r, int32_t x, int32_t y)
+{
+    return !gx_rect_empty(r) &&
+           x >= r.x && y >= r.y &&
+           x < r.x + r.w && y < r.y + r.h;
+}
+
 gx_rect gx_rect_intersect(gx_rect a, gx_rect b);
 gx_rect gx_rect_union(gx_rect a, gx_rect b);
 gx_rect gx_rect_make(int32_t x, int32_t y, int32_t w, int32_t h);

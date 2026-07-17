@@ -465,8 +465,14 @@ void wm_move(wm_t *wm, int id, int32_t x, int32_t y)
     L = gx_compositor_layer(wm->comp, w->layer_id);
     if (L)
         L->bounds = w->frame;
-    gx_server_mark_dirty_rect(old);
-    gx_server_mark_dirty_rect(w->frame);
+
+    /* Drag uses a split old/new path — bounding-box union is what made it lag. */
+    if (wm->drag_id == id)
+        gx_server_mark_drag_move(old, w->frame);
+    else {
+        gx_server_mark_dirty_rect(old);
+        gx_server_mark_dirty_rect(w->frame);
+    }
 }
 
 void wm_resize(wm_t *wm, int id, int32_t wdt, int32_t hgt)
