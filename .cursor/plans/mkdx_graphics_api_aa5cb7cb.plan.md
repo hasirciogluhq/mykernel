@@ -1,6 +1,6 @@
 ---
 name: MKDX Graphics API
-overview: "Kernel core ince kalır. Grafik = drivers/mkdx + drivers/display (ayrı .kmod build). Boot’ta Multiboot module/initrd ile RAM’den load — file/VFS driver gerekmez. Tek MKDX API; BGA/virtio backend; GetScreenSize; 2D+3D; src/gfx kalkar."
+overview: Kernel core ince kalır. Grafik = drivers/mkdx + drivers/display (ayrı .kmod build). Boot’ta Multiboot module/initrd ile RAM’den load — file/VFS driver gerekmez. Tek MKDX API; BGA/virtio backend; GetScreenSize; 2D+3D; src/gfx kalkar.
 todos:
   - id: layout-drivers
     content: src/gfx ve fb public API kaldir; drivers/mkdx + drivers/display_* + pci .h/.c yan yana
