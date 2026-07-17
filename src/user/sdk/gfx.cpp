@@ -7,6 +7,9 @@ namespace {
 
 #include "../ugx_font.inc"
 
+static_assert(UGX_FONT_H == kUIFontH, "kUIFontH must match UGX_FONT_H");
+static_assert(UGX_FONT_W == kUIFontW, "kUIFontW must match UGX_FONT_W");
+
 /* Integer 4×4 supersample coverage for soft rounded corners (0..255). */
 uint8_t round_coverage(int lx, int ly, int w, int h, int r)
 {
@@ -361,7 +364,7 @@ int Surface::text_height(int scale)
 {
     if (scale < 1)
         scale = 1;
-    return UGX_FONT_H * scale;
+    return kUIFontH * scale;
 }
 
 /* Premultiplied glyph atlas: (ch, color) → UGX_FONT_W×H tinted coverage. */

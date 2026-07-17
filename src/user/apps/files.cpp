@@ -19,6 +19,10 @@ using hsrc::sdk::Surface;
 using hsrc::sdk::Window;
 using hsrc::sdk::WindowOptions;
 using hsrc::sdk::kChromeTitleH;
+using hsrc::sdk::kUIFontH;
+using hsrc::sdk::ui_panel_body_top;
+using hsrc::sdk::ui_panel_text_y;
+using hsrc::sdk::ui_text_inset_y;
 using hsrc::sdk::settings::theme;
 using hsrc::sdk::settings::refresh_theme;
 
@@ -27,7 +31,7 @@ constexpr int kWinH = 460;
 constexpr int kPad = 12;
 constexpr int kRowH = 22;
 constexpr int kVisibleRows = 14;
-constexpr int kListY = kChromeTitleH + 56;
+constexpr int kListY = ui_panel_body_top(2);
 constexpr int kMaxEntries = 96;
 constexpr int kStatusChars = 120;
 constexpr int kThemePollEvery = 96;
@@ -242,17 +246,18 @@ void paint()
     s.clear(t.bg);
     s.draw_window_chrome(kWinW, g_win_opts.title, g_win_opts, t.chrome, t.text, t.border);
 
-    s.text(kPad, kChromeTitleH + 10, "Files", t.text, 1);
-    s.text(kPad + 56, kChromeTitleH + 10, g_cwd, t.accent, 1);
+    s.text(kPad, ui_panel_text_y(0), "Files", t.text, 1);
+    s.text(kPad + 56, ui_panel_text_y(0), g_cwd, t.accent, 1);
 
     /* Quick jumps */
-    s.text(kPad, kChromeTitleH + 32, "[apps]", t.text_dim, 1);
-    s.text(kPad + 56, kChromeTitleH + 32, "[/]", t.text_dim, 1);
-    s.text(kPad + 96, kChromeTitleH + 32, "[..]", t.text_dim, 1);
-    s.text(kPad + 140, kChromeTitleH + 32, "name", t.text_dim, 1);
-    s.text(kWinW - kPad - 40, kChromeTitleH + 32, "type", t.text_dim, 1);
-    s.fill(kPad, kChromeTitleH + 48, kWinW - kPad * 2, 1, t.border);
+    s.text(kPad, ui_panel_text_y(1), "[apps]", t.text_dim, 1);
+    s.text(kPad + 56, ui_panel_text_y(1), "[/]", t.text_dim, 1);
+    s.text(kPad + 96, ui_panel_text_y(1), "[..]", t.text_dim, 1);
+    s.text(kPad + 140, ui_panel_text_y(1), "name", t.text_dim, 1);
+    s.text(kWinW - kPad - 40, ui_panel_text_y(1), "type", t.text_dim, 1);
+    s.fill(kPad, ui_panel_text_y(1) + kUIFontH + 4, kWinW - kPad * 2, 1, t.border);
 
+    const int row_text_dy = ui_text_inset_y(kRowH);
     for (int row = 0; row < kVisibleRows; row++) {
         const int index = g_scroll + row;
         const int y = kListY + row * kRowH;
@@ -264,9 +269,9 @@ void paint()
         if (selected)
             s.fill(kPad, y, kWinW - kPad * 2, kRowH - 2, t.accent_soft);
 
-        s.text(kPad + 4, y + 4, entry.name, entry_name_color(entry), 1);
+        s.text(kPad + 4, y + row_text_dy, entry.name, entry_name_color(entry), 1);
         const char *type = entry_type_label(entry);
-        s.text(kWinW - kPad - text_width(type), y + 4, type,
+        s.text(kWinW - kPad - text_width(type), y + row_text_dy, type,
                selected ? t.accent : t.text_soft, 1);
     }
 
@@ -284,7 +289,8 @@ void paint()
 
 int jump_hit(int lx, int ly)
 {
-    if (ly < kChromeTitleH + 28 || ly >= kChromeTitleH + 48)
+    const int row_y = ui_panel_text_y(1);
+    if (ly < row_y || ly >= row_y + kUIFontH)
         return -1;
     if (lx >= kPad && lx < kPad + 50)
         return 0; /* apps */

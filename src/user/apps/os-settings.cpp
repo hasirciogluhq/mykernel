@@ -22,6 +22,9 @@ using hsrc::sdk::Surface;
 using hsrc::sdk::Window;
 using hsrc::sdk::WindowOptions;
 using hsrc::sdk::kChromeTitleH;
+using hsrc::sdk::ui_panel_body_top;
+using hsrc::sdk::ui_panel_text_y;
+using hsrc::sdk::ui_text_inset_y;
 using hsrc::sdk::settings::theme;
 using hsrc::sdk::settings::refresh_theme;
 
@@ -35,7 +38,9 @@ constexpr int kContentX = kSidebarW + kPad;
 constexpr int kContentW = kWinW - kContentX - kPad - 18; /* leave scrollbar lane */
 constexpr int kScrollX = kWinW - 16;
 constexpr int kScrollW = 8;
-constexpr int kContentTop = kChromeTitleH + 52;
+constexpr int kSidebarRowH = 28;
+constexpr int kSidebarRowStep = kSidebarRowH + 4;
+constexpr int kContentTop = ui_panel_body_top(2);
 constexpr int kContentBot = kWinH - 12;
 constexpr int kViewH = kContentBot - kContentTop;
 constexpr int kThemePollEvery = 96;
@@ -479,12 +484,12 @@ void apply_wheel(int32_t wheel)
 
 int sidebar_hit(int lx, int ly)
 {
-    const int top = kChromeTitleH + 40;
+    const int top = ui_panel_body_top(2);
     if (lx < 8 || lx >= kSidebarW - 8 || ly < top)
         return -1;
     for (int i = 0; i < CAT_COUNT; i++) {
-        int y = top + i * 30;
-        if (ly >= y && ly < y + 28)
+        int y = top + i * kSidebarRowStep;
+        if (ly >= y && ly < y + kSidebarRowH)
             return i;
     }
     return -1;
@@ -553,19 +558,20 @@ void draw_sidebar(Surface &s)
     const auto &t = theme();
     s.fill(0, kChromeTitleH, kSidebarW, kWinH - kChromeTitleH, t.sidebar);
     s.fill(kSidebarW - 1, kChromeTitleH, 1, kWinH - kChromeTitleH, t.border);
-    s.text(kPad, kChromeTitleH + 12, "Settings", t.text, 1);
-    s.text(kPad, kChromeTitleH + 28, "preferences", t.text_dim, 1);
+    s.text(kPad, ui_panel_text_y(0), "Settings", t.text, 1);
+    s.text(kPad, ui_panel_text_y(1), "preferences", t.text_dim, 1);
 
-    const int top = kChromeTitleH + 40;
+    const int top = ui_panel_body_top(2);
+    const int text_dy = ui_text_inset_y(kSidebarRowH);
     for (int i = 0; i < CAT_COUNT; i++) {
-        int y = top + i * 30;
+        int y = top + i * kSidebarRowStep;
         bool selected = (i == g_active_category);
         bool hover = (i == g_hover_sidebar);
         if (selected)
-            s.fill(8, y, kSidebarW - 16, 28, t.accent_soft);
+            s.fill(8, y, kSidebarW - 16, kSidebarRowH, t.accent_soft);
         else if (hover)
-            s.fill(8, y, kSidebarW - 16, 28, t.hover);
-        s.text(16, y + 8, kCategories[i].label, selected ? t.accent : t.text, 1);
+            s.fill(8, y, kSidebarW - 16, kSidebarRowH, t.hover);
+        s.text(16, y + text_dy, kCategories[i].label, selected ? t.accent : t.text, 1);
     }
 }
 
@@ -593,16 +599,17 @@ void draw_dropdown_row(Surface &s, int y, int idx, bool hover)
     const Setting &st = g_settings[idx];
     char val[40];
     format_setting_value(st, val, sizeof(val));
+    const int text_dy = ui_text_inset_y(kRowH);
 
     if (hover)
         s.fill(kContentX, y, kContentW, kRowH, t.hover);
-    s.text(kContentX + 4, y + 12, st.label, t.text, 1);
+    s.text(kContentX + 4, y + text_dy, st.label, t.text, 1);
 
     const int bx = kContentX + kContentW - 150;
     s.fill_round(bx, y + 6, 140, kRowH - 12, 6, t.button);
     s.rect(bx, y + 6, 140, kRowH - 12, hover ? t.accent : t.border, 1);
-    s.text(bx + 10, y + 12, val, t.accent, 1);
-    s.text(bx + 120, y + 12, "v", t.text_dim, 1);
+    s.text(bx + 10, y + text_dy, val, t.accent, 1);
+    s.text(bx + 120, y + text_dy, "v", t.text_dim, 1);
     s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
     register_target(y + g_scroll_y, kRowH, TARGET_SETTING, idx);
 }
@@ -612,10 +619,11 @@ void draw_toggle_row(Surface &s, int y, int idx, bool hover)
     const auto &t = theme();
     const Setting &st = g_settings[idx];
     bool on = (st.current == 0);
+    const int text_dy = ui_text_inset_y(kRowH);
 
     if (hover)
         s.fill(kContentX, y, kContentW, kRowH, t.hover);
-    s.text(kContentX + 4, y + 12, st.label, t.text, 1);
+    s.text(kContentX + 4, y + text_dy, st.label, t.text, 1);
 
     const int bx = kContentX + kContentW - 56;
     s.fill_round(bx, y + 10, 44, 16, 8, on ? t.accent : t.inset);
@@ -631,11 +639,12 @@ void draw_slider_row(Surface &s, int y, int idx, bool hover)
     const Setting &st = g_settings[idx];
     char val[16];
     format_setting_value(st, val, sizeof(val));
+    const int text_dy = ui_text_inset_y(kRowH);
 
     if (hover)
         s.fill(kContentX, y, kContentW, kRowH, t.hover);
-    s.text(kContentX + 4, y + 12, st.label, t.text, 1);
-    s.text(kContentX + kContentW - 200, y + 12, val, t.accent, 1);
+    s.text(kContentX + 4, y + text_dy, st.label, t.text, 1);
+    s.text(kContentX + kContentW - 200, y + text_dy, val, t.accent, 1);
 
     const int track_x = kContentX + kContentW - 160;
     const int track_w = 140;
@@ -655,18 +664,19 @@ void begin_page(Surface &s, const char *title, const char *hint)
 {
     const auto &t = theme();
     g_target_count = 0;
-    s.text(kContentX, kChromeTitleH + 12, title, t.text, 1);
-    s.text(kContentX, kChromeTitleH + 30, hint, t.text_dim, 1);
+    s.text(kContentX, ui_panel_text_y(0), title, t.text, 1);
+    s.text(kContentX, ui_panel_text_y(1), hint, t.text_dim, 1);
 }
 
 void draw_info_row(Surface &s, int y, const char *label, const char *value)
 {
     const auto &t = theme();
-    s.text(kContentX + 4, y + 12, label, t.text, 1);
+    const int text_dy = ui_text_inset_y(kRowH);
+    s.text(kContentX + 4, y + text_dy, label, t.text, 1);
     int value_x = kContentX + kContentW - 4 - text_width(value);
     if (value_x < kContentX + 200)
         value_x = kContentX + 200;
-    s.text(value_x, y + 12, value, t.text_dim, 1);
+    s.text(value_x, y + text_dy, value, t.text_dim, 1);
     s.fill(kContentX, y + kRowH - 1, kContentW, 1, t.border);
 }
 
@@ -889,7 +899,7 @@ void paint()
 
     /* Cover chrome/header over scrolled overflow */
     s.fill(kSidebarW, kChromeTitleH, kWinW - kSidebarW, kContentTop - kChromeTitleH, t.bg);
-    s.text(kContentX, kChromeTitleH + 12, kCategories[g_active_category].label, t.text, 1);
+    s.text(kContentX, ui_panel_text_y(0), kCategories[g_active_category].label, t.text, 1);
 
     draw_scrollbar(s);
 

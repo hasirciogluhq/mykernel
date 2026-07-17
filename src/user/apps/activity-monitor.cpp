@@ -18,6 +18,10 @@ using hsrc::sdk::Surface;
 using hsrc::sdk::Window;
 using hsrc::sdk::WindowOptions;
 using hsrc::sdk::kChromeTitleH;
+using hsrc::sdk::kUIFontH;
+using hsrc::sdk::ui_panel_body_top;
+using hsrc::sdk::ui_panel_text_y;
+using hsrc::sdk::ui_text_inset_y;
 using hsrc::sdk::process::ProcListEntry;
 using hsrc::sdk::process::ProcStat;
 using hsrc::sdk::process::SysInfo;
@@ -29,7 +33,8 @@ constexpr int kWinH = 480;
 constexpr int kPad = 12;
 constexpr int kRowH = 22;
 constexpr int kVisibleRows = 12;
-constexpr int kListY = kChromeTitleH + 72;
+constexpr int kHeaderLines = 3;
+constexpr int kListY = ui_panel_body_top(kHeaderLines);
 /* User stacks are 8KiB — keep snapshot buffers in BSS, not on the stack. */
 constexpr int kMaxEntries = 96;
 constexpr int kStatusChars = 128;
@@ -296,7 +301,7 @@ void paint()
     s.clear(t.bg);
     s.draw_window_chrome(kWinW, g_win_opts.title, g_win_opts, t.chrome, t.text, t.border);
 
-    s.text(kPad, kChromeTitleH + 10, "Activity Monitor", t.text, 1);
+    s.text(kPad, ui_panel_text_y(0), "Activity Monitor", t.text, 1);
 
     char line[160];
     line[0] = 0;
@@ -308,19 +313,20 @@ void paint()
     append_uint(line, sizeof(line), g_sysinfo.total_ram_bytes / 1024u);
     append_text(line, sizeof(line), " KB  procs ");
     append_uint(line, sizeof(line), g_sysinfo.process_count);
-    s.text(kPad, kChromeTitleH + 30, line, t.text_dim, 1);
+    s.text(kPad, ui_panel_text_y(1), line, t.text_dim, 1);
 
     const bool can_kill = can_end_task();
-    s.text(kWinW - kPad - 72, kChromeTitleH + 10, "[end]",
+    s.text(kWinW - kPad - 72, ui_panel_text_y(0), "[end]",
            can_kill ? t.danger : t.text_soft, 1);
 
-    s.text(kPad, kChromeTitleH + 52, "name", t.text_dim, 1);
-    s.text(kPad + 220, kChromeTitleH + 52, "pid", t.text_dim, 1);
-    s.text(kPad + 280, kChromeTitleH + 52, "state", t.text_dim, 1);
-    s.text(kPad + 400, kChromeTitleH + 52, "cpu", t.text_dim, 1);
-    s.text(kPad + 480, kChromeTitleH + 52, "mem", t.text_dim, 1);
-    s.fill(kPad, kChromeTitleH + 68, kWinW - kPad * 2, 1, t.border);
+    s.text(kPad, ui_panel_text_y(2), "name", t.text_dim, 1);
+    s.text(kPad + 220, ui_panel_text_y(2), "pid", t.text_dim, 1);
+    s.text(kPad + 280, ui_panel_text_y(2), "state", t.text_dim, 1);
+    s.text(kPad + 400, ui_panel_text_y(2), "cpu", t.text_dim, 1);
+    s.text(kPad + 480, ui_panel_text_y(2), "mem", t.text_dim, 1);
+    s.fill(kPad, ui_panel_text_y(2) + kUIFontH + 4, kWinW - kPad * 2, 1, t.border);
 
+    const int row_text_dy = ui_text_inset_y(kRowH);
     for (int row = 0; row < kVisibleRows; row++) {
         const int index = g_scroll + row;
         const int y = kListY + row * kRowH;
@@ -346,11 +352,11 @@ void paint()
 
         Color fg = selected ? t.accent : t.text;
         Color dim = selected ? t.accent : t.text_dim;
-        s.text(kPad + 4, y + 4, entry.proc.name, fg, 1);
-        s.text(kPad + 220, y + 4, pid_text, fg, 1);
-        s.text(kPad + 280, y + 4, hsrc::sdk::process::state_name(entry.proc.state), dim, 1);
-        s.text(kPad + 400, y + 4, cpu_text, fg, 1);
-        s.text(kPad + 480, y + 4, mem_text, fg, 1);
+        s.text(kPad + 4, y + row_text_dy, entry.proc.name, fg, 1);
+        s.text(kPad + 220, y + row_text_dy, pid_text, fg, 1);
+        s.text(kPad + 280, y + row_text_dy, hsrc::sdk::process::state_name(entry.proc.state), dim, 1);
+        s.text(kPad + 400, y + row_text_dy, cpu_text, fg, 1);
+        s.text(kPad + 480, y + row_text_dy, mem_text, fg, 1);
     }
 
     s.fill(kPad, kWinH - 48, kWinW - kPad * 2, 1, t.border);
@@ -403,8 +409,9 @@ int footer_hit(int lx, int ly)
 
 bool end_hit(int lx, int ly)
 {
+    const int row_y = ui_panel_text_y(0);
     return lx >= kWinW - kPad - 72 && lx < kWinW - kPad &&
-           ly >= kChromeTitleH + 8 && ly < kChromeTitleH + 28;
+           ly >= row_y && ly < row_y + kUIFontH;
 }
 
 void perform_end_task()

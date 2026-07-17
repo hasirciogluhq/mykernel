@@ -96,7 +96,7 @@ int   process_stat(pid_t pid, proc_stat_t *out);
 int   process_sysinfo(sys_info_t *out);
 void  process_account_tick(process_t *p);
 
-/* Shared snapshot page (SYS_PROC_MAP) — publish throttled from yield. */
+/* Shared snapshot page (SYS_PROC_MAP) — publish on demand and state change. */
 proc_page_t *process_page_get(void);
 void         process_snapshot_mark_dirty(void);
 void         process_snapshot_publish(void);

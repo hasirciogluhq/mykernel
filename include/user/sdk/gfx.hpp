@@ -78,6 +78,36 @@ constexpr int kChromeBtnY = 8;
 constexpr int kChromeBtn0X = 10;
 constexpr int kChromeBtnGap = 8;
 
+/* Bitmap font metrics (must match UGX_FONT_H / UGX_FONT_W in ugx_font.inc). */
+constexpr int kUIFontH = 18;
+constexpr int kUIFontW = 16;
+constexpr int kUIFontLeading = 4;
+constexpr int kUIFontLineStep = kUIFontH + kUIFontLeading;
+constexpr int kUIPanelPadY = 12;
+constexpr int kUISectionGap = 8;
+
+/* Stacked panel header lines below window chrome (line 0 = first row). */
+constexpr int ui_panel_text_y(int line = 0)
+{
+    return kChromeTitleH + kUIPanelPadY + line * kUIFontLineStep;
+}
+
+/* Y where scrollable body starts after `header_lines` of panel text. */
+constexpr int ui_panel_body_top(int header_lines = 2)
+{
+    if (header_lines < 1)
+        header_lines = 1;
+    return kChromeTitleH + kUIPanelPadY +
+           (header_lines - 1) * kUIFontLineStep + kUIFontH + kUISectionGap;
+}
+
+/* Vertically center single-line text inside a fixed-height row. */
+constexpr int ui_text_inset_y(int row_h, int scale = 1)
+{
+    const int fh = kUIFontH * scale;
+    return row_h > fh ? (row_h - fh) / 2 : 0;
+}
+
 enum class ChromeHit : int8_t {
     None = 0,
     Close = 1,

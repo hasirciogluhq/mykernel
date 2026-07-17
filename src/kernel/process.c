@@ -361,6 +361,10 @@ void process_snapshot_publish(void)
     }
 
     g_proc_page.count = filled;
+    /* Drop stale rows from the previous sample (count may have shrunk). */
+    if (filled < PROC_PAGE_MAX)
+        memset(&g_proc_page.entries[filled], 0,
+               (size_t)(PROC_PAGE_MAX - filled) * sizeof(g_proc_page.entries[0]));
     g_proc_page.process_count = count;
     g_proc_page.uptime_ticks = now;
     g_proc_page.total_cpu_ticks = now;
@@ -477,6 +481,7 @@ void process_exit(int code)
         current->state = PROC_ZOMBIE;
     }
     process_snapshot_mark_dirty();
+    process_snapshot_publish();
     scheduler_on_exit(current);
     schedule();
     for (;;)
@@ -496,12 +501,23 @@ int process_kill(pid_t pid)
     process_free_windows(p->pid);
     process_free_console(p->pid);
     p->exit_code = 137;
-    if (p->ppid == 0)
-        process_clear_slot(p);
-    else {
+    if (p->ppid == 0) {
+        /*
+         * Boot-spawned orphans (ppid==0): detach like process_exit so we do
+         * not memset a struct whose stack may still be frozen mid-run.
+         */
+        int slot = p->slot;
+        if (slot >= 0 && slot < PROC_MAX && g_procs[slot] == p)
+            g_procs[slot] = NULL;
+        p->state = PROC_UNUSED;
+        p->slot = -1;
+        p->free_next = g_exit_graveyard;
+        g_exit_graveyard = p;
+    } else {
         p->state = PROC_ZOMBIE;
-        process_snapshot_mark_dirty();
     }
+    process_snapshot_mark_dirty();
+    process_snapshot_publish();
     return 0;
 }
 
