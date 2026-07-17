@@ -2,6 +2,8 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/vfs.h>
+#include <kernel/vfs_api.h>
+#include <kernel/errno.h>
 #include <kernel/mkdx_api.h>
 #include <kernel/uaccess.h>
 #include <kernel/string.h>
@@ -147,6 +149,110 @@ static long do_yield(void)
 {
     schedule();
     return 0;
+}
+
+static long do_lseek(long fd, long off, long whence)
+{
+    process_t *p = process_current();
+    int vfd;
+    if (!p)
+        return -EBADF;
+    vfd = process_lookup_fd(p, (int)fd);
+    if (vfd < 0)
+        return -EBADF;
+    return (long)vfs_lseek(vfd, (off_t)off, (int)whence);
+}
+
+static long do_mkdir(long path, long mode)
+{
+    char kpath[256];
+    int len;
+    len = user_strlen((const char *)path, sizeof(kpath));
+    if (len < 0)
+        return -EFAULT;
+    if (copy_from_user(kpath, (const void *)path, (size_t)len + 1) < 0)
+        return -EFAULT;
+    return vfs_mkdir(kpath, (int)mode);
+}
+
+static long do_mount(long source, long target, long fstype, long flags, long data)
+{
+    char ksrc[128], ktgt[128], kfs[32];
+    int len;
+
+    memset(ksrc, 0, sizeof(ksrc));
+    if (source) {
+        len = user_strlen((const char *)source, sizeof(ksrc));
+        if (len < 0 || copy_from_user(ksrc, (const void *)source, (size_t)len + 1) < 0)
+            return -EFAULT;
+    }
+    len = user_strlen((const char *)target, sizeof(ktgt));
+    if (len < 0 || copy_from_user(ktgt, (const void *)target, (size_t)len + 1) < 0)
+        return -EFAULT;
+    len = user_strlen((const char *)fstype, sizeof(kfs));
+    if (len < 0 || copy_from_user(kfs, (const void *)fstype, (size_t)len + 1) < 0)
+        return -EFAULT;
+    (void)data;
+    return vfs_mount(source ? ksrc : NULL, ktgt, kfs, (unsigned long)flags, NULL);
+}
+
+static long do_umount(long target, long flags)
+{
+    char ktgt[128];
+    int len;
+    len = user_strlen((const char *)target, sizeof(ktgt));
+    if (len < 0 || copy_from_user(ktgt, (const void *)target, (size_t)len + 1) < 0)
+        return -EFAULT;
+    return vfs_umount(ktgt, (int)flags);
+}
+
+#define K_AIO_MAX 8
+static vfs_aio_t g_kaios[K_AIO_MAX];
+static int g_kaio_used[K_AIO_MAX];
+
+static long do_aio_submit(long aiop)
+{
+    vfs_aio_t tmp;
+    const vfs_api_t *api = vfs_api_get();
+    process_t *p = process_current();
+    int vfd, slot, rc;
+    if (!api || !api->aio_submit || !p)
+        return -ENOTSUP;
+    if (copy_from_user(&tmp, (const void *)aiop, sizeof(tmp)) < 0)
+        return -EFAULT;
+    vfd = process_lookup_fd(p, tmp.fd);
+    if (vfd < 0)
+        return -EBADF;
+    for (slot = 0; slot < K_AIO_MAX; slot++) {
+        if (!g_kaio_used[slot])
+            break;
+    }
+    if (slot >= K_AIO_MAX)
+        return -EAGAIN;
+    g_kaios[slot] = tmp;
+    g_kaios[slot].fd = vfd;
+    g_kaios[slot].done = 0;
+    g_kaios[slot].complete = NULL;
+    g_kaio_used[slot] = 1;
+    rc = api->aio_submit(&g_kaios[slot]);
+    if (rc < 0) {
+        g_kaio_used[slot] = 0;
+        return rc;
+    }
+    return slot;
+}
+
+static long do_aio_wait(long slot)
+{
+    const vfs_api_t *api = vfs_api_get();
+    int rc;
+    if (!api || !api->aio_wait)
+        return -ENOTSUP;
+    if (slot < 0 || slot >= K_AIO_MAX || !g_kaio_used[slot])
+        return -EINVAL;
+    rc = api->aio_wait(&g_kaios[slot]);
+    g_kaio_used[slot] = 0;
+    return rc;
 }
 
 static const mkdx_api_t *mkdx(void)
@@ -339,15 +445,18 @@ static long do_wm_find(long titlep)
 
 long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
 {
-    (void)a4;
-    (void)a5;
-
     switch (n) {
     case SYS_EXIT:   return do_exit(a1);
     case SYS_READ:   return do_read(a1, a2, a3);
     case SYS_WRITE:  return do_write(a1, a2, a3);
     case SYS_OPEN:   return do_open(a1, a2);
     case SYS_CLOSE:  return do_close(a1);
+    case SYS_LSEEK:  return do_lseek(a1, a2, a3);
+    case SYS_MKDIR:  return do_mkdir(a1, a2);
+    case SYS_MOUNT:  return do_mount(a1, a2, a3, a4, a5);
+    case SYS_UMOUNT: return do_umount(a1, a2);
+    case SYS_AIO_SUBMIT: return do_aio_submit(a1);
+    case SYS_AIO_WAIT:   return do_aio_wait(a1);
     case SYS_GETPID: return do_getpid();
     case SYS_YIELD:  return do_yield();
     case SYS_FORK:   return -1;

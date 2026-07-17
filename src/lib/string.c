@@ -79,3 +79,16 @@ void *memmove(void *dst, const void *src, size_t n)
     }
     return dst;
 }
+
+int memcmp(const void *a, const void *b, size_t n)
+{
+    const uint8_t *pa = a;
+    const uint8_t *pb = b;
+    while (n--) {
+        if (*pa != *pb)
+            return (int)*pa - (int)*pb;
+        pa++;
+        pb++;
+    }
+    return 0;
+}

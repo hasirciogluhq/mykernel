@@ -5,7 +5,7 @@
 
 #define INITRD_MAGIC 0x44525249u /* 'IRRD' */
 #define INITRD_NAME_MAX 32
-#define INITRD_MAX_FILES 32
+#define INITRD_MAX_FILES 64
 
 typedef struct initrd_file {
     char     name[INITRD_NAME_MAX];

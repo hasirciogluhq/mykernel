@@ -3,6 +3,8 @@
 #include <kernel/heap.h>
 #include <kernel/module.h>
 #include <kernel/mkdx_api.h>
+#include <kernel/vfs_api.h>
+#include <kernel/block_api.h>
 #include <drivers/driver.h>
 #include <drivers/pci.h>
 #include <drivers/display.h>
@@ -10,6 +12,7 @@
 #include <drivers/mouse.h>
 #include <drivers/keyboard.h>
 #include <drivers/ps2.h>
+#include <drivers/console.h>
 
 static const ksym_t g_ksyms[] = {
     { "kmalloc",            (void *)kmalloc },
@@ -21,6 +24,7 @@ static const ksym_t g_ksyms[] = {
     { "memcpy",             (void *)memcpy },
     { "memset",             (void *)memset },
     { "memmove",            (void *)memmove },
+    { "memcmp",             (void *)memcmp },
     { "strlen",             (void *)strlen },
     { "strcmp",             (void *)strcmp },
     { "strncmp",            (void *)strncmp },
@@ -56,6 +60,15 @@ static const ksym_t g_ksyms[] = {
     { "mkdx_api_register",  (void *)mkdx_api_register },
     { "mkdx_api_get",       (void *)mkdx_api_get },
 
+    { "vfs_api_register",   (void *)vfs_api_register },
+    { "vfs_api_get",        (void *)vfs_api_get },
+    { "block_api_register", (void *)block_api_register },
+    { "block_api_get",      (void *)block_api_get },
+
+    { "console_read",       (void *)console_read },
+    { "console_write",      (void *)console_write },
+    { "console_print",      (void *)console_print },
+
     { "vga_print",          (void *)vga_print },
     { "vga_putc",           (void *)vga_putc },
 
@@ -65,6 +78,8 @@ static const ksym_t g_ksyms[] = {
     { "keyboard_getchar",   (void *)keyboard_getchar },
     { "keyboard_modifiers", (void *)keyboard_modifiers },
     { "ps2_poll",           (void *)ps2_poll },
+
+    { "ksym_lookup",        (void *)ksym_lookup },
 
     { NULL, NULL }
 };

@@ -4,22 +4,22 @@ overview: Production-ready, Linux tarzı VFS (inode/dentry/super_block/file) tam
 todos:
   - id: vfs-kmod-abi
     content: vfs.kmod — inode/dentry/file/super_block/mount ABI + syscall export tablosu
-    status: pending
+    status: completed
   - id: block-layer-kmod
     content: block.kmod — bdev, request queue, bio, partition scan hook
-    status: pending
+    status: completed
   - id: part-drivers
     content: part_mbr.kmod + part_gpt.kmod (external)
-    status: pending
+    status: completed
   - id: block-backends
     content: virtio_blk, ahci_ata, nvme, loop, ramdisk — hepsi ayrı kmod
-    status: pending
+    status: completed
   - id: fs-pseudo
     content: ramfs, tmpfs, devtmpfs, procfs, sysfs, initrdfs — ayrı kmod
-    status: pending
+    status: completed
   - id: fs-disk
     content: fat32, exfat, ext2/3/4, iso9660, udf, ntfs — ayrı kmod register_filesystem
-    status: pending
+    status: completed
   - id: vfs-features
     content: page cache, dcache, xattr, ioctl, mmap, flock, symlink, poll, notify
     status: pending

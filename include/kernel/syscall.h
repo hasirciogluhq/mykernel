@@ -10,8 +10,16 @@
 #define SYS_WRITE    4
 #define SYS_OPEN     5
 #define SYS_CLOSE    6
+#define SYS_LSEEK    19
 #define SYS_GETPID   20
+#define SYS_MKDIR    39
+#define SYS_MOUNT    21
+#define SYS_UMOUNT   22
 #define SYS_YIELD    158   /* sched_yield */
+
+/* Private async I/O */
+#define SYS_AIO_SUBMIT 220
+#define SYS_AIO_WAIT   221
 
 /* Graphics / window syscalls (mykernel private range) */
 #define SYS_GX_INFO          200

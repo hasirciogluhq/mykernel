@@ -29,7 +29,7 @@
 #define R_386_32   1
 #define R_386_PC32 2
 
-#define MODULE_MAX     8
+#define MODULE_MAX     48
 #define MODULE_MAX_SH  64
 
 typedef struct {

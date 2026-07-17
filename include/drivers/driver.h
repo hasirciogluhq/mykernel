@@ -3,7 +3,7 @@
 
 #include <kernel/types.h>
 
-#define DRIVER_MAX          32
+#define DRIVER_MAX          64
 #define DRIVER_NAME_MAX     32
 #define DRIVER_VERSION_MAX  16
 
@@ -25,7 +25,9 @@ typedef enum {
     DRIVER_CLASS_DISPLAY,
     DRIVER_CLASS_INPUT,
     DRIVER_CLASS_BUS,
-    DRIVER_CLASS_CHAR
+    DRIVER_CLASS_CHAR,
+    DRIVER_CLASS_BLOCK,
+    DRIVER_CLASS_FS
 } driver_class_t;
 
 #define DRIVER_FLAG_AUTO  (1u << 0) /* load via drivers_load_all() */
