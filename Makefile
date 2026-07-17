@@ -274,14 +274,21 @@ $(MKFATIMG): tools/mkfatimg.c
 	$(HOSTCC) -O2 -Wall -Wextra -o $@ $<
 
 # Persistent virtio disk (kept outside build/ so `make clean` does not wipe data).
-$(DISKIMG): $(MKFATIMG)
-	$(MKFATIMG) $@ $(DISK_MB)
+# Only create when missing — never rewrite an existing image (that wiped /root files).
+$(DISKIMG): | $(MKFATIMG)
+	@if [ ! -f $@ ]; then \
+		echo "creating fresh $(DISKIMG) ($(DISK_MB) MiB)"; \
+		$(MKFATIMG) $@ $(DISK_MB); \
+	else \
+		echo "keeping existing $(DISKIMG) (make disk-reset to wipe)"; \
+	fi
 
 disk: $(DISKIMG)
 
 disk-reset:
 	rm -f $(DISKIMG)
-	$(MAKE) $(DISKIMG)
+	$(MAKE) $(MKFATIMG)
+	$(MKFATIMG) $(DISKIMG) $(DISK_MB)
 
 define pack_mke_from_elf
 	@mkdir -p $(dir $(3))
