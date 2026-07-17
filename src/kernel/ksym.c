@@ -19,6 +19,10 @@
 #include <drivers/ps2.h>
 #include <drivers/console.h>
 
+uint64_t __udivdi3(uint64_t n, uint64_t d);
+uint64_t __umoddi3(uint64_t n, uint64_t d);
+uint64_t __udivmoddi4(uint64_t n, uint64_t d, uint64_t *rem);
+
 static const ksym_t g_ksyms[] = {
     { "kmalloc",            (void *)kmalloc },
     { "kmalloc_aligned",    (void *)kmalloc_aligned },
@@ -30,6 +34,10 @@ static const ksym_t g_ksyms[] = {
     { "memset",             (void *)memset },
     { "memmove",            (void *)memmove },
     { "memcmp",             (void *)memcmp },
+
+    { "__udivdi3",          (void *)__udivdi3 },
+    { "__umoddi3",          (void *)__umoddi3 },
+    { "__udivmoddi4",       (void *)__udivmoddi4 },
     { "strlen",             (void *)strlen },
     { "strcmp",             (void *)strcmp },
     { "strncmp",            (void *)strncmp },

@@ -30,6 +30,18 @@ CXXFLAGS := -std=c++17 -ffreestanding -m32 -Wall -Wextra -Werror \
             -O2 -fno-stack-protector -fno-pic -fno-builtin -nostdlib \
             -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics \
             -I$(INC) -DUSERMODE
+
+# Separate usermode app tree (apps/imgui-demo) — C++23 + freestanding shims
+IMGUI_DEMO_DIR := apps/imgui-demo
+IMGUI_DIR      := $(IMGUI_DEMO_DIR)/third_party/imgui
+IMGUI_CXXFLAGS := -std=c++23 -ffreestanding -m32 -Wall -Wextra \
+                  -Wno-unused-parameter -Wno-unused-function -Wno-missing-field-initializers \
+                  -Wno-invalid-offsetof -Wno-class-memaccess \
+                  -O2 -fno-stack-protector -fno-pic -fno-builtin -nostdlib \
+                  -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics \
+                  -fcoroutines \
+                  -I$(INC) -I$(IMGUI_DEMO_DIR) -I$(IMGUI_DEMO_DIR)/freestanding -I$(IMGUI_DIR) \
+                  -DUSERMODE
 MODCFLAGS := $(CFLAGS) -I$(SRC)/drivers/mkdx \
              -I$(SRC)/drivers/display/bga \
              -I$(SRC)/drivers/display/virtio_gpu
@@ -72,7 +84,8 @@ KERNEL_C := $(SRC)/kernel/main.c \
             $(SRC)/kernel/initrd_store.c \
             $(SRC)/kernel/uaccess.c
 
-LIB_C    := $(SRC)/lib/string.c
+LIB_C    := $(SRC)/lib/string.c \
+            $(SRC)/lib/libgcc.c
 
 DRV_C    := $(SRC)/drivers/driver.c \
             $(SRC)/drivers/internal.c \
@@ -225,7 +238,8 @@ MKE_TERM := $(USEROUT)/terminal.mke
 MKE_SETTINGS := $(USEROUT)/os-settings.mke
 MKE_FILES := $(USEROUT)/files.mke
 MKE_ACTIVITY := $(USEROUT)/activity-monitor.mke
-MKES     := $(MKE_OSUI) $(MKE_TERM) $(MKE_SETTINGS) $(MKE_FILES) $(MKE_ACTIVITY)
+MKE_IMGUI_DEMO := $(USEROUT)/imgui-demo.mke
+MKES     := $(MKE_OSUI) $(MKE_TERM) $(MKE_SETTINGS) $(MKE_FILES) $(MKE_ACTIVITY) $(MKE_IMGUI_DEMO)
 ENV_ASSET := $(BUILD)/environment
 INITRD_ASSETS := assets/wallpaper-default.bmp $(ENV_ASSET)
 LOAD_OSUI := 0x02000000
@@ -233,6 +247,22 @@ LOAD_TERM := 0x02200000
 LOAD_SETTINGS := 0x02400000
 LOAD_FILES := 0x02600000
 LOAD_ACTIVITY := 0x02800000
+LOAD_IMGUI_DEMO := 0x02A00000
+
+IMGUI_DEMO_SRCS := $(IMGUI_DEMO_DIR)/main.cpp \
+                   $(IMGUI_DEMO_DIR)/imgui_impl_ugx.cpp \
+                   $(IMGUI_DEMO_DIR)/support.cpp \
+                   $(IMGUI_DIR)/imgui.cpp \
+                   $(IMGUI_DIR)/imgui_draw.cpp \
+                   $(IMGUI_DIR)/imgui_tables.cpp \
+                   $(IMGUI_DIR)/imgui_widgets.cpp
+IMGUI_DEMO_OBJS := $(BUILD)/apps/imgui-demo/main.o \
+                   $(BUILD)/apps/imgui-demo/imgui_impl_ugx.o \
+                   $(BUILD)/apps/imgui-demo/support.o \
+                   $(BUILD)/apps/imgui-demo/imgui.o \
+                   $(BUILD)/apps/imgui-demo/imgui_draw.o \
+                   $(BUILD)/apps/imgui-demo/imgui_tables.o \
+                   $(BUILD)/apps/imgui-demo/imgui_widgets.o
 
 .PHONY: all drivers userapps run clean disk disk-reset
 
@@ -362,6 +392,24 @@ $(USEROUT)/activity-monitor.elf: $(BUILD)/user/apps/activity-monitor.o $(SDK_OBJ
 
 $(MKE_ACTIVITY): $(USEROUT)/activity-monitor.elf $(PACK_MKE)
 	$(call pack_mke_from_elf,$<,$(USEROUT)/activity-monitor.bin,$@,$(LOAD_ACTIVITY),activity-monitor)
+
+$(BUILD)/apps/imgui-demo/%.o: $(IMGUI_DEMO_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(IMGUI_CXXFLAGS) -c $< -o $@
+
+$(BUILD)/apps/imgui-demo/%.o: $(IMGUI_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(IMGUI_CXXFLAGS) -c $< -o $@
+
+LIBGCC := $(shell $(CXX) -print-libgcc-file-name)
+
+$(USEROUT)/imgui-demo.elf: $(IMGUI_DEMO_OBJS) $(SDK_OBJS) user.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(USERLDFLAGS) --defsym=LOAD_ADDR=$(LOAD_IMGUI_DEMO) -o $@ \
+		$(IMGUI_DEMO_OBJS) $(SDK_OBJS) $(LIBGCC)
+
+$(MKE_IMGUI_DEMO): $(USEROUT)/imgui-demo.elf $(PACK_MKE)
+	$(call pack_mke_from_elf,$<,$(USEROUT)/imgui-demo.bin,$@,$(LOAD_IMGUI_DEMO),imgui-demo)
 
 $(INITRD): $(PACKER) $(KMODS) $(MKES) $(INITRD_ASSETS)
 	$(PACKER) $@ $(KMODS) $(MKES) $(INITRD_ASSETS)
