@@ -5,33 +5,7 @@
 #include <kernel/mkdx_api.h>
 #include <kernel/uaccess.h>
 #include <kernel/string.h>
-#include <kernel/heap.h>
 #include <user/gx.h>
-#include <arch/x86/io.h>
-
-static void e9_puts(const char *s)
-{
-    if (!s)
-        return;
-    while (*s)
-        outb(0xE9, (uint8_t)*s++);
-}
-
-static void e9_u32(uint32_t v)
-{
-    char buf[11];
-    int i = 10;
-    buf[i] = 0;
-    if (v == 0) {
-        outb(0xE9, '0');
-        return;
-    }
-    while (v && i > 0) {
-        buf[--i] = (char)('0' + (v % 10));
-        v /= 10;
-    }
-    e9_puts(&buf[i]);
-}
 
 typedef struct {
     uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
@@ -206,36 +180,11 @@ static long do_wm_create(long argp)
     ugx_win_create args;
     const mkdx_api_t *api = mkdx();
     process_t *p = process_current();
-    long id;
-
-    if (!api || !api->wm_create) {
-        e9_puts("wm_create: no api\n");
+    if (!api || !api->wm_create)
         return -1;
-    }
-    if (copy_from_user(&args, (const void *)argp, sizeof(args)) < 0) {
-        e9_puts("wm_create: copy fail\n");
+    if (copy_from_user(&args, (const void *)argp, sizeof(args)) < 0)
         return -1;
-    }
-    e9_puts("wm_create ");
-    e9_puts(args.title);
-    e9_puts(" w=");
-    e9_u32((uint32_t)args.w);
-    e9_puts(" h=");
-    e9_u32((uint32_t)args.h);
-    e9_puts(" heap_free=");
-    e9_u32((uint32_t)heap_free());
-    e9_puts("\n");
-    id = api->wm_create(&args, p ? (uint32_t)p->pid : 0);
-    if (id < 0) {
-        e9_puts("wm_create FAIL heap_free=");
-        e9_u32((uint32_t)heap_free());
-        e9_puts("\n");
-    } else {
-        e9_puts("wm_create ok id=");
-        e9_u32((uint32_t)id);
-        e9_puts("\n");
-    }
-    return id;
+    return api->wm_create(&args, p ? (uint32_t)p->pid : 0);
 }
 
 static long do_wm_destroy(long id)
