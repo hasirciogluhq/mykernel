@@ -1,6 +1,6 @@
 #include <gfx/server.h>
+#include <drivers/driver.h>
 #include <drivers/fb.h>
-#include <drivers/ps2.h>
 #include <drivers/keyboard.h>
 #include <drivers/mouse.h>
 #include <gfx/accel.h>
@@ -116,7 +116,7 @@ void gx_server_poll_input(void)
     if (!s)
         return;
 
-    ps2_poll();
+    drivers_poll();
 
     /* Coalesce moves — only apply the latest position */
     mouse_event_t ev;
@@ -157,10 +157,13 @@ void gx_server_poll_input(void)
 
 int gx_server_init(multiboot_info_t *mbi)
 {
+    (void)mbi;
     memset(&g_server, 0, sizeof(g_server));
 
-    if (fb_init(mbi) < 0)
+    /* Display / input drivers are loaded by the driver framework. */
+    if (driver_get_state("fb") != DRIVER_STATE_LOADED)
         return -1;
+
     if (gx_device_init(&g_server.device) < 0)
         return -1;
     if (gx_compositor_init(&g_server.comp, &g_server.device) < 0)
@@ -177,11 +180,8 @@ int gx_server_init(multiboot_info_t *mbi)
     if (!g_server.cursor)
         return -1;
 
-    ps2_init();
-    keyboard_init();
     mouse_set_bounds((int32_t)g_server.device.fb->width,
                      (int32_t)g_server.device.fb->height);
-    mouse_init();
 
     g_server.cursor_x = -1;
     g_server.cursor_y = -1;

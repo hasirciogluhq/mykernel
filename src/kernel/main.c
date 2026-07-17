@@ -1,11 +1,10 @@
 #include <multiboot.h>
 #include <drivers/vga.h>
-#include <drivers/fb.h>
+#include <drivers/driver.h>
 #include <kernel/heap.h>
 #include <kernel/syscall.h>
 #include <kernel/vfs.h>
 #include <gfx/server.h>
-#include <gfx/color.h>
 #include <arch/x86/gdt.h>
 #include <arch/x86/idt.h>
 #include <user/gx.h>
@@ -28,6 +27,16 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     idt_init();
     syscall_init();
     vfs_init();
+
+    driver_framework_init();
+    drivers_register_internal();
+    driver_attach("vga");
+
+    if (drivers_load_all(mbi) < 0) {
+        vga_print("drivers_load_all failed\n");
+        for (;;)
+            __asm__ volatile("hlt");
+    }
 
     if (gx_server_init(mbi) < 0) {
         vga_print("gx_server_init failed\n");

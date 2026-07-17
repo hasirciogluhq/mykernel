@@ -34,7 +34,9 @@ KERNEL_C := $(SRC)/kernel/main.c \
 
 LIB_C    := $(SRC)/lib/string.c
 
-DRV_C    := $(SRC)/drivers/vga.c \
+DRV_C    := $(SRC)/drivers/driver.c \
+            $(SRC)/drivers/internal.c \
+            $(SRC)/drivers/vga.c \
             $(SRC)/drivers/fb.c \
             $(SRC)/drivers/console.c \
             $(SRC)/drivers/keyboard.c \
