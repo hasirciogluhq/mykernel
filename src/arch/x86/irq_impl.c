@@ -111,7 +111,7 @@ void irq_dispatch(uint32_t irq)
             g_idle_ticks++;
         drivers_poll();
         /*
-         * Keep cursor/WM alive when apps are PROC_BLOCKED (wait_idle / Event).
+         * Keep cursor/WM alive when apps are PROC_BLOCKED (Event / input wait).
          * Timer also drives preemption via scheduler_on_timer — no yield needed.
          */
         api = mkdx_api_get();

@@ -6,6 +6,7 @@
 #include <user/sdk/settings.hpp>
 #include <user/sdk/syscall.hpp>
 #include <user/sdk/sync.hpp>
+#include <user/sdk/thread.hpp>
 #include <user/string.h>
 #include <kernel/vfs.h>
 #include <kernel/argv.h>
@@ -26,8 +27,10 @@ using hsrc::sdk::Color;
 using hsrc::sdk::Input;
 using hsrc::sdk::ScreenInfo;
 using hsrc::sdk::Surface;
+using hsrc::sdk::GxDevice;
 using hsrc::sdk::Window;
 using hsrc::sdk::WindowOptions;
+using hsrc::sdk::kGxWaitForever;
 using hsrc::sdk::kChromeTitleH;
 using hsrc::sdk::settings::theme;
 using hsrc::sdk::settings::refresh_theme;
@@ -42,6 +45,7 @@ constexpr int kHist = 120;
 constexpr int kThemePollEvery = 96;
 
 Window g_win;
+GxDevice g_gx;
 WindowOptions g_win_opts;
 Input g_prev_input{};
 char g_lines[kHist][kCols + 1];
@@ -136,8 +140,8 @@ void paint()
     const bool full = (g_damage_line < 0);
 
     if (full) {
-        s.clear(t.term_bg);
-        s.draw_window_chrome(kWinW, g_win_opts.title, g_win_opts, t.chrome, t.text, t.border);
+        /* Client only — chrome is WM decorate on GxDevice::present. */
+        s.fill(0, kChromeTitleH, kWinW, kWinH - kChromeTitleH, t.term_bg);
     }
 
     int y = top;
@@ -1437,12 +1441,8 @@ void handle_click(const Input &in)
     if (lx < 0 || ly < 0 || lx >= g_win_opts.w || ly >= g_win_opts.h)
         return;
 
-    ChromeHit chrome = g_win.hit_chrome(lx, ly, g_win_opts);
-    if (chrome != ChromeHit::None) {
-        (void)g_win.handle_chrome_hit(chrome);
-        (void)refresh_window_options();
-        g_dirty = true;
-    }
+    (void)lx;
+    (void)ly;
 }
 
 } // namespace
@@ -1452,7 +1452,7 @@ extern "C" void mke_main(void)
     ScreenInfo info{};
     if (!hsrc::sdk::screen_info(info) || info.width == 0) {
         for (;;)
-            hsrc::sdk::wait_idle(32u);
+            hsrc::sdk::this_thread::sleep_for(1000u);
     }
 
     (void)refresh_theme();
@@ -1491,8 +1491,9 @@ extern "C" void mke_main(void)
     line_push("HSRC Terminal — running as root (uid 0)", col_accent());
     line_push("Type 'help' for builtins.", col_dim());
 
-    paint();
-    (void)hsrc::sdk::present();
+    if (!g_gx.create(g_win))
+        hsrc::sdk::exit(1);
+    g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
 
     for (;;) {
         if (!g_win.ok()) {
@@ -1505,18 +1506,20 @@ extern "C" void mke_main(void)
             g_theme_poll = 0;
             if (refresh_theme()) {
                 g_damage_line = -1;
-                g_dirty = true;
+                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
             }
         }
 
         (void)refresh_window_options();
 
-        Input in{};
-        if (hsrc::sdk::input(in)) {
+        const uint32_t wait_to =
+            g_win_opts.minimized ? 200u : kGxWaitForever;
+        Input in = g_gx.wait(wait_to);
+
+        {
             const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_input.buttons);
             if (pressed & UGX_BTN_LEFT) {
                 const bool interactive = !g_win_opts.minimized && g_win_opts.visible;
-                /* hit_id is z-order topmost — ignore clicks owned by another window. */
                 if (interactive && in.hit_id == g_win.id())
                     handle_click(in);
             }
@@ -1533,13 +1536,11 @@ extern "C" void mke_main(void)
             }
         }
 
-        /* Present only after content damage — shell (os-ui) still paces WM moves. */
-        if (g_dirty && !g_win_opts.minimized) {
+        if (!g_win_opts.minimized) {
+            (void)g_gx.begin_scene();
             paint();
-            (void)hsrc::sdk::present();
-            hsrc::sdk::wait_idle(1u);
-        } else {
-            hsrc::sdk::wait_idle(g_win_opts.minimized ? 32u : 12u);
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
         }
     }
 }

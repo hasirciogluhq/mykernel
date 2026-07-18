@@ -582,7 +582,7 @@ process_t *process_get(pid_t pid)
     return NULL;
 }
 
-static process_t *thread_get(pid_t tid)
+process_t *process_by_tid(pid_t tid)
 {
     for (int i = 0; i < PROC_MAX; i++) {
         process_t *p = g_procs[i];
@@ -590,6 +590,11 @@ static process_t *thread_get(pid_t tid)
             return p;
     }
     return NULL;
+}
+
+static process_t *thread_get(pid_t tid)
+{
+    return process_by_tid(tid);
 }
 
 pid_t process_create(const char *name, void (*entry)(void))
@@ -611,8 +616,11 @@ pid_t process_create_user(const char *name, void (*entry)(void))
     p->is_user = 1;
     p->user_entry = entry;
     /*
-     * PIC + mkdx/PS2 poll paths are BSP-only for now. Migrating a GUI app to
-     * an AP races the timer's drivers_poll() and corrupts kernel state (#UD).
+     * Pin user/GUI processes to BSP. MKDX compose/present, PS/2 poll, and
+     * display_ops are not SMP-safe: running a GX syscall on an AP while the
+     * BSP timer idle path calls drivers_poll()/pump_input() races and
+     * corrupts kernel state (seen as #UD with a garbage EIP like 0x207
+     * right after the first full gx present).
      */
     p->cpu_affinity = 0;
     setup_kstack(p, user_trampoline, entry);

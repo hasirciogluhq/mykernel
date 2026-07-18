@@ -13,7 +13,11 @@
 #define WM_CHROME_BTN_ZONE 78
 #define WM_KEYBUF_SIZE     64
 
-/* Client-drawn window: userspace owns all pixels (no kernel chrome). */
+/*
+ * Kernel WM owns hit-test / drag / stacking.
+ * Frame chrome is painted by GxDevice::present (decoration pass);
+ * apps only draw the client area below WM_TITLEBAR_H.
+ */
 typedef struct wm_window {
     int         used;
     int         id;

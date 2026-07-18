@@ -746,9 +746,247 @@ int ui_px(int logical)
     return logical * ui_scale();
 }
 
-bool present()
+bool GxDevice::create(Window &w)
 {
+    if (!w.ok())
+        return false;
+    win_ = &w;
+    wait_win_id_ = w.id();
+    ready_ = 1;
+    in_scene_ = 0;
+    scene_ready_ = 0;
+    last_drag_id_ = -1;
+    seq_ = 0;
+    chrome_bar_ = rgb(45, 45, 48);
+    chrome_title_ = rgb(240, 240, 240);
+    chrome_border_ = rgb(60, 60, 64);
+    chrome_set_ = 1;
+    for (int i = 0; i < 32; i++) {
+        keys_prev_[i] = 0;
+        keys_cur_[i] = 0;
+    }
+    return true;
+}
+
+bool GxDevice::create_shell()
+{
+    win_ = nullptr;
+    wait_win_id_ = -1;
+    ready_ = 1;
+    in_scene_ = 0;
+    scene_ready_ = 0;
+    last_drag_id_ = -1;
+    seq_ = 0;
+    chrome_set_ = 0;
+    for (int i = 0; i < 32; i++) {
+        keys_prev_[i] = 0;
+        keys_cur_[i] = 0;
+    }
+    return true;
+}
+
+void GxDevice::release()
+{
+    win_ = nullptr;
+    ready_ = 0;
+    in_scene_ = 0;
+    scene_ready_ = 0;
+}
+
+Surface &GxDevice::backbuffer()
+{
+    static Surface empty;
+    /* Draw target = window-mapped pixels (published on Present). */
+    return win_ ? win_->surface() : empty;
+}
+
+const Surface &GxDevice::backbuffer() const
+{
+    static const Surface empty;
+    return win_ ? win_->surface() : empty;
+}
+
+Surface &GxDevice::framebuffer()
+{
+    /* Compositor-facing surface; same map until a private swapchain exists. */
+    return backbuffer();
+}
+
+const Surface &GxDevice::framebuffer() const
+{
+    return backbuffer();
+}
+
+int GxDevice::client_top() const
+{
+    if (!win_)
+        return 0;
+    WindowOptions o;
+    if (!win_->get_options(o))
+        return kChromeTitleH;
+    if (!o.framed || o.no_title)
+        return 0;
+    return kChromeTitleH;
+}
+
+int GxDevice::client_height() const
+{
+    if (!backbuffer().valid())
+        return 0;
+    int h = (int)backbuffer().height() - client_top();
+    return h > 0 ? h : 0;
+}
+
+void GxDevice::set_chrome_colors(Color bar, Color title, Color border)
+{
+    chrome_bar_ = bar;
+    chrome_title_ = title;
+    chrome_border_ = border;
+    chrome_set_ = 1;
+}
+
+void GxDevice::decorate_chrome()
+{
+    if (!win_ || !chrome_set_)
+        return;
+    WindowOptions o;
+    if (!win_->get_options(o))
+        return;
+    if (!o.framed || o.no_title)
+        return;
+    backbuffer().draw_window_chrome(o.w, o.title, o, chrome_bar_, chrome_title_,
+                                    chrome_border_);
+}
+
+bool GxDevice::begin_scene()
+{
+    if (!ready_)
+        return false;
+    in_scene_ = 1;
+    scene_ready_ = 0;
+    return true;
+}
+
+bool GxDevice::end_scene()
+{
+    if (!ready_ || !in_scene_)
+        return false;
+    in_scene_ = 0;
+    scene_ready_ = 1;
+    return true;
+}
+
+bool GxDevice::present()
+{
+    if (!ready_ || !scene_ready_)
+        return true;
+    scene_ready_ = 0;
+
+    /* During WM drag, kernel slides the layer — skip app present (no hitch). */
+    if (win_ && last_drag_id_ == win_->id())
+        return true;
+
+    /* Publish backbuffer/framebuffer (window map) → MKDX compose → display FB. */
+    decorate_chrome();
+    if (win_ && win_->id() >= 0)
+        (void)syscall1(SYS_GX_DAMAGE, win_->id());
+    else
+        (void)syscall1(SYS_GX_DAMAGE, 0);
+    /* Routes to virtio-gpu present when registered, else BGA page-flip/copy. */
     return syscall1(SYS_GX_PRESENT, 0) == 0;
+}
+
+void GxDevice::clear(Color c)
+{
+    int top = client_top();
+    Surface &s = backbuffer();
+    if (!s.valid())
+        return;
+    if (top <= 0)
+        s.clear(c);
+    else
+        s.fill(0, top, (int)s.width(), (int)s.height() - top, c);
+}
+
+void GxDevice::draw_fill(int x, int y, int w, int h, Color c)
+{
+    backbuffer().fill(x, map_y(y), w, h, c);
+}
+
+void GxDevice::draw_fill_round(int x, int y, int w, int h, int radius, Color c)
+{
+    backbuffer().fill_round(x, map_y(y), w, h, radius, c);
+}
+
+void GxDevice::draw_rect(int x, int y, int w, int h, Color c, int thickness)
+{
+    backbuffer().rect(x, map_y(y), w, h, c, thickness);
+}
+
+void GxDevice::draw_text(int x, int y, const char *s, Color c, int scale)
+{
+    backbuffer().text(x, map_y(y), s, c, scale);
+}
+
+Input GxDevice::wait(uint32_t timeout_ticks)
+{
+    Input in{};
+    if (!ready_)
+        return in;
+    long to = (timeout_ticks == kGxWaitForever) ? (long)-1 : (long)timeout_ticks;
+    long r = syscall3(SYS_INPUT_WAIT, (long)wait_win_id_, (long)seq_, to);
+    if (r >= 0)
+        seq_ = (uint32_t)r;
+    if (!input(in))
+        return Input{};
+    seq_ = in.seq;
+    last_drag_id_ = in.drag_id;
+    for (int i = 0; i < 32; i++) {
+        keys_prev_[i] = keys_cur_[i];
+        keys_cur_[i] = in.keys[i];
+    }
+
+    /* WM chrome buttons — handled here so apps stay client-only. */
+    if (win_ && win_->ok() && in.hits(win_->id())) {
+        WindowOptions o;
+        if (win_->get_options(o) && !o.minimized && o.visible) {
+            uint8_t edge = (uint8_t)(in.buttons & ~prev_buttons_);
+            if (edge & UGX_BTN_LEFT) {
+                int lx = in.mouse_x - o.x;
+                int ly = in.mouse_y - o.y;
+                ChromeHit hit = win_->hit_chrome(lx, ly, o);
+                if (hit != ChromeHit::None)
+                    (void)win_->handle_chrome_hit(hit);
+            }
+        }
+    }
+    prev_buttons_ = in.buttons;
+    return in;
+}
+
+bool GxDevice::key_down(int vk) const
+{
+    if (vk < 0 || vk > 255)
+        return false;
+    return (keys_cur_[vk >> 3] & (uint8_t)(1u << (vk & 7))) != 0;
+}
+
+bool GxDevice::key_pressed(int vk) const
+{
+    if (vk < 0 || vk > 255)
+        return false;
+    uint8_t bit = (uint8_t)(1u << (vk & 7));
+    int i = vk >> 3;
+    return (keys_cur_[i] & bit) != 0 && (keys_prev_[i] & bit) == 0;
+}
+
+bool GxDevice::key_released(int vk) const
+{
+    if (vk < 0 || vk > 255)
+        return false;
+    uint8_t bit = (uint8_t)(1u << (vk & 7));
+    int i = vk >> 3;
+    return (keys_cur_[i] & bit) == 0 && (keys_prev_[i] & bit) != 0;
 }
 
 bool set_wallpaper(const Color *pixels, uint32_t width, uint32_t height, uint32_t stride)
@@ -783,6 +1021,10 @@ bool input(Input &out)
     out.focus_id = st.focus_id;
     out.hit_id = st.hit_id;
     out.wheel = st.wheel;
+    out.seq = st.seq;
+    out.drag_id = st.drag_id;
+    for (int i = 0; i < 32; i++)
+        out.keys[i] = st.keys[i];
     return true;
 }
 
@@ -812,11 +1054,6 @@ int window_find_class(const char *class_name)
         return -1;
     long id = syscall1(SYS_WM_FIND_CLASS, (long)class_name);
     return (id >= 0) ? (int)id : -1;
-}
-
-void damage()
-{
-    (void)syscall1(SYS_GX_DAMAGE, 0);
 }
 
 } // namespace hsrc::sdk

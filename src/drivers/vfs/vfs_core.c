@@ -5,6 +5,10 @@
 #include <kernel/heap.h>
 #include <kernel/string.h>
 #include <kernel/module.h>
+#include <kernel/process.h>
+#include <kernel/scheduler.h>
+#include <kernel/sync.h>
+#include <arch/x86/irq.h>
 #include <drivers/vfs_fs.h>
 #include <drivers/driver.h>
 #include <drivers/vga.h>
@@ -732,10 +736,17 @@ typedef struct aio_ctx {
 static void aio_done(void *ctx, ssize_t n)
 {
     aio_ctx_t *c = (aio_ctx_t *)ctx;
+    process_t *p;
     if (!c || !c->aio)
         return;
     c->aio->result = n;
     c->aio->done = 1;
+    if (c->aio->waiter_tid > 0) {
+        p = process_by_tid((pid_t)c->aio->waiter_tid);
+        c->aio->waiter_tid = -1;
+        if (p)
+            process_wake(p);
+    }
     if (c->aio->complete)
         c->aio->complete(c->aio);
 }
@@ -753,6 +764,7 @@ static int vfs_do_aio_submit(vfs_aio_t *aio)
     f = &g_files[aio->fd];
     aio->done = 0;
     aio->result = 0;
+    aio->waiter_tid = -1;
 
     ctx = (aio_ctx_t *)kmalloc(sizeof(*ctx));
     if (!ctx)
@@ -798,17 +810,23 @@ static int vfs_do_aio_submit(vfs_aio_t *aio)
 static int vfs_do_aio_wait(vfs_aio_t *aio)
 {
     const block_api_t *blk;
-    int spins = 0;
+    process_t *cur;
     if (!aio)
         return -EINVAL;
     blk = block_api_get();
-    while (!aio->done && spins < 1000000) {
+    cur = process_current();
+    while (!aio->done) {
         if (blk && blk->poll)
             blk->poll();
-        spins++;
+        if (aio->done)
+            break;
+        if (!cur)
+            return -EIO;
+        /* Completion wake preferred; short tick backup for poll-driven I/O. */
+        aio->waiter_tid = (int)(cur->tid > 0 ? cur->tid : cur->pid);
+        process_block(irq_timer_ticks() + 2);
+        schedule();
     }
-    if (!aio->done)
-        return -EIO;
     return (int)aio->result;
 }
 

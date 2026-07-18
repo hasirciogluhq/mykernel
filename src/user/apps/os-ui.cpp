@@ -6,6 +6,7 @@
 #include <user/sdk/time.hpp>
 #include <user/sdk/syscall.hpp>
 #include <user/sdk/sync.hpp>
+#include <user/sdk/thread.hpp>
 #include <user/sdk/fs.hpp>
 #include <user/string.h>
 
@@ -20,6 +21,7 @@
 namespace {
 
 using hsrc::sdk::Color;
+using hsrc::sdk::GxDevice;
 using hsrc::sdk::Input;
 using hsrc::sdk::ScreenInfo;
 using hsrc::sdk::Surface;
@@ -115,6 +117,7 @@ struct DockSlot {
 Window g_desktop;
 Window g_menubar;
 Window g_dock;
+GxDevice g_gx;
 
 int g_sw = 0;
 int g_sh = 0;
@@ -1058,7 +1061,7 @@ extern "C" void mke_main(void)
     ScreenInfo info{};
     if (!hsrc::sdk::screen_info(info) || info.width == 0 || info.height == 0) {
         for (;;)
-            hsrc::sdk::wait_idle(32u);
+            hsrc::sdk::this_thread::sleep_for(1000u);
     }
 
     g_sw = (int)info.width;
@@ -1067,14 +1070,23 @@ extern "C" void mke_main(void)
     for (int i = 0; i < APP_COUNT; i++)
         g_pinned[i] = kApps[i].default_pinned;
 
-    if (!build_ui()) {
-        (void)hsrc::sdk::set_wallpaper_color(rgb(160, 30, 30));
-        (void)hsrc::sdk::present();
+    if (!g_gx.create_shell()) {
         for (;;)
-            hsrc::sdk::wait_idle(32u);
+            hsrc::sdk::this_thread::sleep_for(1000u);
     }
 
-    (void)hsrc::sdk::present();
+    if (!build_ui()) {
+        (void)hsrc::sdk::set_wallpaper_color(rgb(160, 30, 30));
+        (void)g_gx.begin_scene();
+        (void)g_gx.end_scene();
+        (void)g_gx.present();
+        for (;;)
+            hsrc::sdk::this_thread::sleep_for(1000u);
+    }
+
+    (void)g_gx.begin_scene();
+    (void)g_gx.end_scene();
+    (void)g_gx.present();
 
     for (;;) {
         bool dirty_dock = false;
@@ -1151,8 +1163,34 @@ extern "C" void mke_main(void)
                 dirty_dock = true;
         }
 
-        Input in{};
-        if (hsrc::sdk::input(in)) {
+        /* Flush UI before blocking — never spin with timeout 0. */
+        if (dirty_menu) {
+            (void)g_gx.begin_scene();
+            paint_menubar();
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
+            dirty_menu = false;
+        }
+        if (dirty_dock) {
+            (void)g_gx.begin_scene();
+            paint_dock();
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
+            dirty_dock = false;
+        }
+
+        /*
+         * Shell watches all input (win=-1) for dock/menubar hover.
+         * Short timeout only while animating / clock / scan.
+         */
+        uint32_t wait_to = 50u; /* ~0.5s clock/scan cadence when idle */
+        if (animating() || g_hover >= 0 || g_menu_hover >= 0 || g_status_hover >= 0 ||
+            g_mag_cursor_x >= 0)
+            wait_to = 1u;
+
+        Input in = g_gx.wait(wait_to);
+
+        {
             if (in.focus_id != g_focus_id) {
                 g_focus_id = in.focus_id;
                 for (int i = 0; i < g_slot_count; i++) {
@@ -1219,24 +1257,17 @@ extern "C" void mke_main(void)
         if (animating())
             dirty_dock = true;
 
-        if (dirty_menu)
+        if (dirty_menu) {
+            (void)g_gx.begin_scene();
             paint_menubar();
-        if (dirty_dock)
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
+        }
+        if (dirty_dock) {
+            (void)g_gx.begin_scene();
             paint_dock();
-
-        const bool did_work = dirty_menu || dirty_dock;
-        if (did_work)
-            (void)hsrc::sdk::present();
-
-        /*
-         * Always leave Ready via wait_idle (PROC_BLOCKED). Timer/input wake
-         * the desktop — no yield(0) Ready spin.
-         */
-        const bool near_chrome = g_hover >= 0 || g_menu_hover >= 0 ||
-                                 g_status_hover >= 0 || g_mag_cursor_x >= 0;
-        uint32_t sleep_ticks = 8u;
-        if (did_work || animating() || near_chrome)
-            sleep_ticks = 1u;
-        hsrc::sdk::wait_idle(sleep_ticks);
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
+        }
     }
 }

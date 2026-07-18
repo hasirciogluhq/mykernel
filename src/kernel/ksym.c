@@ -9,6 +9,9 @@
 #include <kernel/socket.h>
 #include <kernel/initrd_store.h>
 #include <kernel/process.h>
+#include <kernel/sync.h>
+#include <kernel/scheduler.h>
+#include <arch/x86/irq.h>
 #include <drivers/driver.h>
 #include <drivers/pci.h>
 #include <drivers/display.h>
@@ -72,6 +75,8 @@ static const ksym_t g_ksyms[] = {
 
     { "mkdx_api_register",  (void *)mkdx_api_register },
     { "mkdx_api_get",       (void *)mkdx_api_get },
+    { "input_event_notify", (void *)input_event_notify },
+    { "input_event_seq",    (void *)input_event_seq },
 
     { "vfs_api_register",   (void *)vfs_api_register },
     { "vfs_api_get",        (void *)vfs_api_get },
@@ -98,6 +103,11 @@ static const ksym_t g_ksyms[] = {
     { "initrd_store_get",   (void *)initrd_store_get },
     { "initrd_store_set",   (void *)initrd_store_set },
     { "process_current",    (void *)process_current },
+    { "process_by_tid",     (void *)process_by_tid },
+    { "process_block",      (void *)process_block },
+    { "process_wake",       (void *)process_wake },
+    { "schedule",           (void *)schedule },
+    { "irq_timer_ticks",    (void *)irq_timer_ticks },
     { "modules_load_blob",  (void *)modules_load_blob },
     { "module_load_path",   (void *)module_load_path },
     { "module_find",        (void *)module_find },
@@ -123,6 +133,7 @@ static const ksym_t g_ksyms[] = {
     { "mouse_set_bounds",     (void *)mouse_set_bounds },
     { "keyboard_getchar",   (void *)keyboard_getchar },
     { "keyboard_modifiers", (void *)keyboard_modifiers },
+    { "keyboard_keys_bitmap", (void *)keyboard_keys_bitmap },
     { "ps2_poll",           (void *)ps2_poll },
 
     { "ksym_lookup",        (void *)ksym_lookup },

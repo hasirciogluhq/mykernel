@@ -116,6 +116,7 @@
 #define SYS_THREAD_EXIT     286  /* a1=code — exit current thread only */
 #define SYS_THREAD_JOIN     287  /* a1=tid a2=status* → 0; blocks */
 #define SYS_THREAD_DETACH   288  /* a1=tid */
+#define SYS_INPUT_WAIT      289  /* a1=win_id(-1=any) a2=last_seq a3=timeout(<0 forever) → seq */
 
 /* SYS_SPAWN flags (Wave O). */
 #define SPAWN_CONSOLE_VISIBLE  0x01u

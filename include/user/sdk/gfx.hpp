@@ -23,12 +23,25 @@ struct Input {
     int32_t focus_id = -1;
     int32_t hit_id  = -1;  /* topmost window under cursor (z-order), or -1 */
     int32_t wheel   = 0;   /* notches since last input(); +up / -down (PS/2) */
+    uint32_t seq    = 0;   /* GxDevice-owned generation */
+    uint8_t keys[32]{};    /* scancode bitmap (bit N = key N down) */
+    int32_t drag_id = -1;  /* WM drag target, or -1 */
 
     /* Click/hover belongs to this window (z-order topmost under cursor). */
     bool hits(int window_id) const { return window_id >= 0 && hit_id == window_id; }
     /* Keyboard focus target for SYS_WM_POP_KEY. */
     bool focused(int window_id) const { return window_id >= 0 && focus_id == window_id; }
+
+    bool key_down(int vk) const
+    {
+        if (vk < 0 || vk > 255)
+            return false;
+        return (keys[vk >> 3] & (uint8_t)(1u << (vk & 7))) != 0;
+    }
 };
+
+/* Wait forever for GxDevice::wait_input. */
+constexpr uint32_t kGxWaitForever = 0xFFFFFFFFu;
 
 struct WindowOptions {
     int32_t x = 0;
@@ -190,18 +203,115 @@ public:
     void damage(int x, int y, int w, int h);
 
 private:
+    friend class GxDevice;
     bool remap_surface();
 
     int id_ = -1;
     Surface surf_;
 };
 
+/*
+ * DirectX-style swap semantics (Begin/End/Present).
+ *
+ * Userspace (this class):
+ *   backbuffer()  = draw target (window-mapped client pixels)
+ *   framebuffer() = compositor commit surface (same map; Present publishes it)
+ *
+ * Kernel MKDX scanout (true tear-free pair):
+ *   device.backbuffer  = composed scene
+ *   device.framebuffer = display LFB / GPU scanout
+ *   present            = copy/flip via display_ops (virtio-gpu else BGA)
+ *
+ *   WM (kernel)     = hit-test, drag, stacking
+ *   GxDevice        = client pixels + chrome decorate on Present
+ *   App             = only draws client (y >= client_top())
+ *
+ *   gx.create(win);
+ *   for (;;) {
+ *     Input in = gx.wait();
+ *     gx.begin_scene();
+ *     // draw to gx.backbuffer() / window surface
+ *     gx.end_scene();
+ *     gx.present();   // chrome + damage + MKDX compose → display FB
+ *   }
+ *   gx.release();
+ */
+class GxDevice {
+public:
+    GxDevice() = default;
+    GxDevice(const GxDevice &) = delete;
+    GxDevice &operator=(const GxDevice &) = delete;
+
+    bool create(Window &w);
+    bool create_shell();
+    void release();
+    void destroy() { release(); }
+
+    bool ok() const { return ready_; }
+    Window *window() const { return win_; }
+    /* App draw target (window map). Prefer this over Window::surface(). */
+    Surface &backbuffer();
+    const Surface &backbuffer() const;
+    /* Surface published to the compositor on Present (window map). */
+    Surface &framebuffer();
+    const Surface &framebuffer() const;
+
+    /* Titlebar height reserved for WM chrome (0 if shell / no frame). */
+    int client_top() const;
+    int client_height() const;
+
+    bool begin_scene();
+    bool end_scene();
+    /*
+     * Decorate chrome, mark damage, then SYS_GX_PRESENT.
+     * MKDX composes into device.backbuffer and flips/copies to the
+     * display framebuffer (GPU driver if active, else BGA LFB).
+     * Skips while this window is dragged.
+     */
+    bool present();
+
+    /* Chrome colors used by Present decorate pass. */
+    void set_chrome_colors(Color bar, Color title, Color border);
+
+    /* Client-space draws (y=0 is first pixel below titlebar when framed). */
+    void clear(Color c);
+    void draw_fill(int x, int y, int w, int h, Color c);
+    void draw_fill_round(int x, int y, int w, int h, int radius, Color c);
+    void draw_rect(int x, int y, int w, int h, Color c, int thickness = 1);
+    void draw_text(int x, int y, const char *s, Color c, int scale = 1);
+
+    /* Block until input (SDK-owned wait — apps do not manage seq). */
+    Input wait(uint32_t timeout_ticks = kGxWaitForever);
+    Input wait_input(uint32_t timeout_ticks = kGxWaitForever) { return wait(timeout_ticks); }
+
+    bool key_down(int vk) const;
+    bool key_pressed(int vk) const;
+    bool key_released(int vk) const;
+
+private:
+    void decorate_chrome();
+    int map_y(int client_y) const { return client_y + client_top(); }
+
+    Window *win_ = nullptr;
+    int wait_win_id_ = -1;
+    int ready_ = 0;
+    int in_scene_ = 0;
+    int scene_ready_ = 0; /* end_scene completed — present will submit */
+    int last_drag_id_ = -1;
+    uint32_t seq_ = 0;
+    uint8_t keys_prev_[32]{};
+    uint8_t keys_cur_[32]{};
+    Color chrome_bar_{};
+    Color chrome_title_{};
+    Color chrome_border_{};
+    int chrome_set_ = 0;
+    uint8_t prev_buttons_ = 0;
+};
+
 bool screen_info(ScreenInfo &out);
-/* Integer UI scale from screen size (1× @ ~720p, 2× @ ≥1600×1080). */
 int ui_scale();
-/* Scale a logical pixel size by ui_scale(). */
 int ui_px(int logical);
-bool present();
+
 bool set_wallpaper(const Color *pixels, uint32_t width, uint32_t height, uint32_t stride);
 bool set_wallpaper_default();
 bool set_wallpaper_color(Color c);
@@ -209,8 +319,6 @@ bool input(Input &out);
 bool window_set(int id, const WindowOptions &opts);
 bool window_get(int id, WindowOptions &out);
 bool window_close(int id);
-/* Find top matching window by class_name (−1 if none). Prefer focused/visible. */
 int  window_find_class(const char *class_name);
-void damage();
 
 } // namespace hsrc::sdk

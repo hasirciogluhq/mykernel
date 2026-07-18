@@ -15,6 +15,20 @@ static int e0_prefix;
 static uint8_t q[KBD_QSIZE];
 static unsigned q_head;
 static unsigned q_tail;
+/* Set-1 scancode down bits (incl. E0 codes in high half: 0x80|code). */
+static uint8_t g_keys[32];
+
+static void key_set(uint8_t vk, int down)
+{
+    unsigned idx = (unsigned)vk >> 3;
+    uint8_t bit = (uint8_t)(1u << (vk & 7u));
+    if (idx >= 32)
+        return;
+    if (down)
+        g_keys[idx] |= bit;
+    else
+        g_keys[idx] &= (uint8_t)~bit;
+}
 
 /* Turkish Q (ISO-8859-9) — physical scancode set 1 positions */
 static const uint8_t keymap[128] = {
@@ -122,6 +136,25 @@ void keyboard_init(void)
     e0_prefix = 0;
     q_head = 0;
     q_tail = 0;
+    for (int i = 0; i < 32; i++)
+        g_keys[i] = 0;
+}
+
+void keyboard_keys_bitmap(uint8_t out[32])
+{
+    if (!out)
+        return;
+    for (int i = 0; i < 32; i++)
+        out[i] = g_keys[i];
+}
+
+int keyboard_key_down(uint8_t scancode)
+{
+    unsigned idx = (unsigned)scancode >> 3;
+    uint8_t bit = (uint8_t)(1u << (scancode & 7u));
+    if (idx >= 32)
+        return 0;
+    return (g_keys[idx] & bit) != 0;
 }
 
 uint8_t keyboard_modifiers(void)
@@ -148,6 +181,10 @@ void keyboard_handle_scancode(uint8_t sc)
     uint8_t code = sc & 0x7F;
     int ext = e0_prefix;
     e0_prefix = 0;
+
+    /* vk: plain set-1 code; E0 keys use 0x80|code so arrows/GUI don't collide. */
+    uint8_t vk = ext ? (uint8_t)(0x80u | code) : code;
+    key_set(vk, !release);
 
     /* modifiers */
     if (code == 0x2A || code == 0x36) {

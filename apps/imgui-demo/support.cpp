@@ -3,8 +3,8 @@
 #include <stdarg.h>
 
 #include "mykernel_imconfig.h"
-#include <user/sdk/sync.hpp>
 #include <user/sdk/syscall.hpp>
+#include <user/sdk/thread.hpp>
 
 namespace {
 
@@ -194,7 +194,7 @@ void *realloc(void *p, size_t n)
 void abort(void)
 {
     for (;;)
-        hsrc::sdk::wait_idle(32u);
+        hsrc::sdk::this_thread::sleep_for(1000u);
 }
 
 char *strchr(const char *s, int c)

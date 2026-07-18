@@ -20,6 +20,9 @@ void cpu_init_bsp(void)
     g_cpus[0].id = 0;
     g_cpus[0].apic_id = apic;
     g_cpus[0].online = 1;
+    g_cpus[0].package = 0;
+    g_cpus[0].core = 0;
+    g_cpus[0].smt = 0;
     g_cpus[0].started = 1;
     g_cpus[0].current = NULL;
     g_cpus[0].idle = NULL;
@@ -37,6 +40,10 @@ cpu_t *cpu_alloc(uint8_t apic_id)
     memset(c, 0, sizeof(*c));
     c->id = g_cpu_count;
     c->apic_id = apic_id;
+    /* Flat APIC probe: one package, core == dense id, no SMT map yet. */
+    c->package = 0;
+    c->core = c->id;
+    c->smt = 0;
     g_cpu_count++;
     return c;
 }

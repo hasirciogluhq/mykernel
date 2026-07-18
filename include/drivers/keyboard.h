@@ -31,5 +31,8 @@ void    keyboard_poll(void);           /* ps2_poll + drain */
 int     keyboard_getchar(void);        /* -1 empty, else 0..255 Latin-5 */
 int     keyboard_has_char(void);
 uint8_t keyboard_modifiers(void);
+/* Copy 32-byte scancode-down bitmap (bit N = set-1 code N currently down). */
+void    keyboard_keys_bitmap(uint8_t out[32]);
+int     keyboard_key_down(uint8_t scancode);
 
 #endif

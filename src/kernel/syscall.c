@@ -464,14 +464,17 @@ static long do_proc_wait(long last_gen, long timeout_ticks)
     if (!p)
         return (long)page->generation;
 
-    if (timeout_ticks < 0)
-        timeout_ticks = 0;
-    if (timeout_ticks > 1000)
-        timeout_ticks = 1000;
+    if (timeout_ticks == 0)
+        return (long)page->generation;
+    if (timeout_ticks > 100000)
+        timeout_ticks = 100000;
 
     now = scheduler_tick_count();
     p->proc_wait_gen = lg;
-    process_block(now + (uint64_t)timeout_ticks);
+    if (timeout_ticks < 0)
+        process_block(~(uint64_t)0);
+    else
+        process_block(now + (uint64_t)timeout_ticks);
     schedule();
     p->proc_wait_gen = 0;
 
@@ -1094,8 +1097,10 @@ static long do_input_state(long outp)
     const mkdx_api_t *api = mkdx();
     if (!api || !api->input_state)
         return -1;
+    memset(&st, 0, sizeof(st));
     if (api->input_state(&st) < 0)
         return -1;
+    st.seq = input_event_seq();
     if (copy_to_user((void *)outp, &st, sizeof(st)) < 0)
         return -1;
     return 0;
@@ -1744,6 +1749,7 @@ long syscall_dispatch(long n, long a1, long a2, long a3, long a4, long a5)
     case SYS_EVENT_WAIT: return kevent_wait((int)a1, a2);
     case SYS_EVENT_SIGNAL: return kevent_signal((int)a1);
     case SYS_EVENT_BROADCAST: return kevent_broadcast((int)a1);
+    case SYS_INPUT_WAIT: return input_event_wait((int)a1, (uint32_t)a2, a3);
     case SYS_THREAD_CREATE: return do_thread_create(a1, a2);
     case SYS_THREAD_EXIT: return do_thread_exit(a1);
     case SYS_THREAD_JOIN: return do_thread_join(a1, a2);

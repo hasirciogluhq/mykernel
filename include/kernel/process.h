@@ -97,6 +97,9 @@ typedef struct process {
     uint64_t     start_ticks;
     uint64_t     wake_tick;    /* scheduler tick when BLOCKED may wake (~0 = event-only) */
     uint32_t     proc_wait_gen; /* non-zero: wait until snapshot generation changes */
+    int          input_wait_active; /* 1 = blocked in SYS_INPUT_WAIT */
+    uint32_t     input_wait_last;   /* last seq observed by waiter */
+    int          input_wait_win;    /* -1 = any window; else filter */
     int          wait_event;   /* kevent id while waiting, or -1 */
     struct process *wait_next; /* kevent waiter list link */
     uint32_t     image_bytes; /* .mke image+bss at load_addr (0 for kernel threads) */
@@ -111,6 +114,7 @@ process_t  *process_current(void);
 void        process_set_current(process_t *p);
 process_t **process_table(void);
 process_t  *process_get(pid_t pid);
+process_t  *process_by_tid(pid_t tid); /* any thread slot (tid == pid for main) */
 void        process_reap_graveyard(void);
 
 pid_t process_create(const char *name, void (*entry)(void));

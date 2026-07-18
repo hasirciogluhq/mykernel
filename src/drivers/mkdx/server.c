@@ -8,6 +8,7 @@
 #include "accel.h"
 #include "compositor.h"
 #include <kernel/string.h>
+#include <kernel/sync.h>
 
 #define CURSOR_W 12
 #define CURSOR_H 19
@@ -29,6 +30,12 @@ static int32_t g_deferred_mx, g_deferred_my;
 static int g_deferred_btn;
 static uint8_t g_deferred_btn_code;
 static int32_t g_deferred_btn_x, g_deferred_btn_y;
+/* Cursor hops during g_frame_busy — apply as soon as the frame releases bb. */
+static int g_pending_cursor;
+static int32_t g_pending_cx, g_pending_cy;
+/* Last pointer we notified — collapse duplicate poll_input MOVE wakes. */
+static int g_have_last_notify;
+static int32_t g_last_notify_mx, g_last_notify_my;
 /* Drag damage as two rects — never the fat old∪new bbox (that was the hitch). */
 static int g_drag_damage;
 static gx_rect g_drag_old;
@@ -384,6 +391,14 @@ static void flush_deferred_btn(gx_server *s)
                        g_deferred_btn_x, g_deferred_btn_y);
 }
 
+static void flush_pending_cursor(gx_server *s)
+{
+    if (!g_pending_cursor || !s || g_frame_busy)
+        return;
+    g_pending_cursor = 0;
+    flush_cursor_at(s, g_pending_cx, g_pending_cy);
+}
+
 static void sync_drag_fast_layer(gx_server *s)
 {
     wm_window *w;
@@ -399,6 +414,9 @@ static void sync_drag_fast_layer(gx_server *s)
 static void end_drag_if_released(gx_server *s)
 {
     const mouse_state_t *ms;
+    wm_window *w;
+    int drag_id;
+    gx_rect frame;
 
     /* Grab ends on button-up anywhere — even if the UP event was coalesced away. */
     if (!s || s->wm.drag_id < 0)
@@ -407,13 +425,20 @@ static void end_drag_if_released(gx_server *s)
     if (!ms || (ms->buttons & MOUSE_BTN_LEFT))
         return;
 
+    drag_id = s->wm.drag_id;
+    w = wm_get(&s->wm, drag_id);
+    frame = w ? w->frame : gx_rect_make(0, 0, 0, 0);
+
     s->wm.drag_id = -1;
     cursor_erase_from_bb(s);
     gx_compositor_drag_end();
     g_drag_damage = 0;
-    /* Fold stashed app damage + restore frost at the final position. */
+    /* Fold stashed app damage; prefer window frame over full-screen dirty. */
     merge_pending_into_dirty(s);
-    gx_server_mark_dirty();
+    if (!gx_rect_empty(frame))
+        gx_server_mark_dirty_rect(frame);
+    else
+        gx_server_mark_dirty();
 }
 
 void gx_server_poll_input(void)
@@ -423,9 +448,19 @@ void gx_server_poll_input(void)
     mouse_event_t last_move;
     int have_move = 0;
     int ch;
+    uint32_t flags = 0;
+    int prev_hit;
+    int prev_focus;
+    int hit;
+    int focus;
+    const mouse_state_t *ms;
 
     if (!s)
         return;
+
+    prev_hit = wm_hit_test(&s->wm,
+                           s->cursor_x, s->cursor_y);
+    prev_focus = wm_focused_id(&s->wm);
 
     drivers_poll();
 
@@ -433,11 +468,13 @@ void gx_server_poll_input(void)
         if (ev.type == MOUSE_EV_MOVE) {
             last_move = ev;
             have_move = 1;
+            flags |= INPUT_EV_MOVE;
         } else if (ev.type == MOUSE_EV_DOWN) {
             if (have_move) {
                 apply_wm_move(s, last_move.x, last_move.y);
                 have_move = 0;
             }
+            flags |= INPUT_EV_BUTTON;
             /* Focus/raise start damage — defer across compose; never drop the grab. */
             if (g_frame_busy) {
                 g_deferred_btn = 1;
@@ -452,10 +489,13 @@ void gx_server_poll_input(void)
                 apply_wm_move(s, last_move.x, last_move.y);
                 have_move = 0;
             }
+            flags |= INPUT_EV_BUTTON;
             /* Press+release while busy: cancel deferred press; always clear drag. */
             if (g_deferred_btn && g_deferred_btn_code == ev.button)
                 g_deferred_btn = 0;
             wm_on_mouse_button(&s->wm, ev.button, 0, ev.x, ev.y);
+        } else if (ev.type == MOUSE_EV_WHEEL) {
+            flags |= INPUT_EV_WHEEL;
         }
     }
     if (have_move) {
@@ -466,8 +506,50 @@ void gx_server_poll_input(void)
     end_drag_if_released(s);
     sync_drag_fast_layer(s);
 
-    while ((ch = keyboard_getchar()) >= 0)
+    while ((ch = keyboard_getchar()) >= 0) {
         wm_push_key(&s->wm, (uint8_t)ch);
+        flags |= INPUT_EV_KEY;
+    }
+
+    ms = mouse_get();
+    if (ms && ms->wheel != 0)
+        flags |= INPUT_EV_WHEEL;
+
+    hit = ms ? wm_hit_test(&s->wm, ms->x, ms->y) : -1;
+    focus = wm_focused_id(&s->wm);
+    if (hit != prev_hit || focus != prev_focus)
+        flags |= INPUT_EV_FOCUS | INPUT_EV_MOVE;
+
+    /*
+     * Safety net: position can move (PS/2 drained elsewhere) without a live
+     * queue entry — still notify so wait_events(-1) shell wakes for hover.
+     */
+    if (ms && (ms->x != s->cursor_x || ms->y != s->cursor_y))
+        flags |= INPUT_EV_MOVE;
+
+    /*
+     * Coalesce: pump+frame_tick may poll twice with the same tip. Cursor still
+     * updates every pump; only skip redundant MOVE-only waiter wakes.
+     */
+    if (ms && flags && !(flags & ~(INPUT_EV_MOVE | INPUT_EV_FOCUS))) {
+        if (g_have_last_notify &&
+            g_last_notify_mx == ms->x && g_last_notify_my == ms->y &&
+            !(flags & INPUT_EV_FOCUS))
+            flags &= ~INPUT_EV_MOVE;
+        if (flags & INPUT_EV_MOVE) {
+            g_have_last_notify = 1;
+            g_last_notify_mx = ms->x;
+            g_last_notify_my = ms->y;
+        }
+    } else if (ms && (flags & (INPUT_EV_BUTTON | INPUT_EV_KEY |
+                               INPUT_EV_WHEEL | INPUT_EV_WM))) {
+        g_have_last_notify = 1;
+        g_last_notify_mx = ms->x;
+        g_last_notify_my = ms->y;
+    }
+
+    if (flags)
+        input_event_notify(flags, hit, focus, prev_hit, -1);
 }
 
 void gx_server_pump_input(void)
@@ -481,13 +563,22 @@ void gx_server_pump_input(void)
 
     gx_server_poll_input();
 
-    /* Don't redraw cursor while compose/full-present owns the backbuffer. */
-    if (g_frame_busy)
-        return;
-
     ms = mouse_get();
     mx = ms ? ms->x : 0;
     my = ms ? ms->y : 0;
+
+    /*
+     * C21/C22: cursor must track the pointer even when apps are PROC_BLOCKED.
+     * During compose the backbuffer is owned — remember the tip and apply
+     * as soon as the frame finishes (see gx_server_frame_tick).
+     */
+    if (g_frame_busy) {
+        g_pending_cursor = 1;
+        g_pending_cx = mx;
+        g_pending_cy = my;
+        return;
+    }
+
     flush_cursor_at(s, mx, my);
 }
 
@@ -608,6 +699,7 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
         gx_server_poll_input();
         flush_deferred_btn(s);
         flush_deferred_move(s);
+        flush_pending_cursor(s);
         end_drag_if_released(s);
         if (s->wm.drag_id < 0)
             break;
@@ -635,6 +727,7 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
 
     /* Keep pending app damage parked until drag ends. */
     gx_server_poll_input();
+    flush_pending_cursor(s);
     ms = mouse_get();
     if (ms && (ms->x != mx || ms->y != my))
         flush_cursor_at(s, ms->x, ms->y);
@@ -831,6 +924,7 @@ int gx_server_frame_tick(void)
     /* Apply deferred press/drag + any damage marked during the frame. */
     flush_deferred_btn(s);
     flush_deferred_move(s);
+    flush_pending_cursor(s);
     end_drag_if_released(s);
     merge_pending_into_dirty(s);
 

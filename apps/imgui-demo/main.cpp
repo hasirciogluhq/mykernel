@@ -11,16 +11,18 @@
 #include <user/sdk/settings.hpp>
 #include <user/sdk/sync.hpp>
 #include <user/sdk/syscall.hpp>
+#include <user/sdk/thread.hpp>
 
 namespace {
 
-using hsrc::sdk::ChromeHit;
 using hsrc::sdk::Color;
+using hsrc::sdk::GxDevice;
 using hsrc::sdk::Input;
 using hsrc::sdk::ScreenInfo;
 using hsrc::sdk::Window;
 using hsrc::sdk::WindowOptions;
 using hsrc::sdk::kChromeTitleH;
+using hsrc::sdk::kGxWaitForever;
 using hsrc::sdk::settings::refresh_theme;
 using hsrc::sdk::settings::theme;
 
@@ -29,11 +31,11 @@ constexpr int kWinH = 480;
 constexpr int kThemePollEvery = 240;
 
 Window g_win;
+GxDevice g_gx;
 WindowOptions g_win_opts;
 ScreenInfo g_screen{};
 Input g_prev{};
 int g_clicks = 0;
-bool g_dirty = true;
 bool g_imgui_ready = false;
 int g_theme_poll = 0;
 
@@ -92,31 +94,9 @@ void paint()
 
     /* Client body under chrome. */
     s.fill(0, kChromeTitleH, g_win_opts.w, g_win_opts.h - kChromeTitleH, t.bg);
-    s.draw_window_chrome(g_win_opts.w, g_win_opts.title, g_win_opts,
-                         t.chrome, t.text, t.border);
 
     ImGui_ImplUgx_RenderDrawData(ImGui::GetDrawData(), s, kChromeTitleH);
     g_win.damage();
-}
-
-void handle_chrome_click(const Input &in)
-{
-    if (!refresh_window_options())
-        return;
-    if (g_win_opts.minimized || !g_win_opts.visible)
-        return;
-
-    const int lx = in.mouse_x - g_win_opts.x;
-    const int ly = in.mouse_y - g_win_opts.y;
-    if (lx < 0 || ly < 0 || lx >= g_win_opts.w || ly >= g_win_opts.h)
-        return;
-
-    ChromeHit chrome = g_win.hit_chrome(lx, ly, g_win_opts);
-    if (chrome != ChromeHit::None) {
-        (void)g_win.handle_chrome_hit(chrome);
-        (void)refresh_window_options();
-        g_dirty = true;
-    }
 }
 
 } // namespace
@@ -130,7 +110,7 @@ extern "C" void mke_main(void)
 
     if (!hsrc::sdk::screen_info(g_screen) || g_screen.width == 0) {
         for (;;)
-            hsrc::sdk::wait_idle(32u);
+            hsrc::sdk::this_thread::sleep_for(1000u);
     }
 
     (void)refresh_theme();
@@ -162,6 +142,8 @@ extern "C" void mke_main(void)
 
     if (!g_win.create(opts))
         hsrc::sdk::exit(1);
+    if (!g_gx.create(g_win))
+        hsrc::sdk::exit(1);
     (void)refresh_window_options();
 
     g_win.show(true);
@@ -187,7 +169,7 @@ extern "C" void mke_main(void)
     if (!ImGui_ImplUgx_Init())
         hsrc::sdk::exit(1);
     g_imgui_ready = true;
-    g_dirty = true;
+    g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
 
     for (;;) {
         if (!g_win.ok()) {
@@ -200,20 +182,17 @@ extern "C" void mke_main(void)
             g_theme_poll = 0;
             if (refresh_theme()) {
                 apply_imgui_theme();
-                g_dirty = true;
+                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
             }
         }
 
         (void)refresh_window_options();
 
-        Input in{};
-        if (hsrc::sdk::input(in)) {
-            const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev.buttons);
-            const bool interactive = !g_win_opts.minimized && g_win_opts.visible;
+        const uint32_t wait_to =
+            g_win_opts.minimized ? 200u : kGxWaitForever;
+        Input in = g_gx.wait(wait_to);
 
-            if (interactive && (pressed & UGX_BTN_LEFT) && in.hits(g_win.id()))
-                handle_chrome_click(in);
-
+        {
             ImGui_ImplUgx_NewFrame(g_win, in, g_win_opts, g_prev.buttons,
                                    kChromeTitleH);
             ImGui::NewFrame();
@@ -228,36 +207,26 @@ extern "C" void mke_main(void)
                          ImGuiWindowFlags_NoCollapse);
             ImGui::TextUnformatted("Dear ImGui on MKDX / ugx");
             ImGui::Text("hit=%d focus=%d", (int)in.hit_id, (int)in.focus_id);
-            if (ImGui::Button("Click me")) {
+            if (ImGui::Button("Click me"))
                 g_clicks++;
-                g_dirty = true;
-            }
             ImGui::SameLine();
             ImGui::Text("Clicks: %d", g_clicks);
             ImGui::Separator();
             ImGui::TextWrapped(
-                "Client-drawn chrome, hit_id click gating, wheel + keys.");
+                "Client paint + WM chrome decorate on Present.");
             static char buf[64] = "type here";
-            if (ImGui::InputText("Name", buf, sizeof(buf)))
-                g_dirty = true;
+            (void)ImGui::InputText("Name", buf, sizeof(buf));
             ImGui::End();
 
             ImGui::Render();
-            /* Soft-float raster is expensive — only repaint when UI moved. */
-            if (ImGui::IsAnyItemActive() || ImGui::IsAnyItemHovered() ||
-                ImGui::GetIO().WantTextInput ||
-                (in.buttons != g_prev.buttons) || in.wheel != 0)
-                g_dirty = true;
             g_prev = in;
         }
 
-        if (g_dirty && !g_win_opts.minimized) {
+        if (!g_win_opts.minimized) {
+            (void)g_gx.begin_scene();
             paint();
-            (void)hsrc::sdk::present();
-            g_dirty = false;
-            hsrc::sdk::wait_idle(1u);
-        } else {
-            hsrc::sdk::wait_idle(g_win_opts.minimized ? 32u : 12u);
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
         }
     }
 }

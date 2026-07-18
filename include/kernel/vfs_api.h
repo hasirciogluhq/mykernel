@@ -13,6 +13,7 @@ typedef struct vfs_aio {
     ssize_t  result;
     void   (*complete)(struct vfs_aio *aio);
     void    *private_data;
+    int      waiter_tid; /* blocked thread tid, or -1 */
 } vfs_aio_t;
 
 typedef struct vfs_api {

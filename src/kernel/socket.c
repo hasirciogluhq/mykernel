@@ -3,6 +3,10 @@
 #include <kernel/netstack.h>
 #include <kernel/errno.h>
 #include <kernel/string.h>
+#include <kernel/process.h>
+#include <kernel/scheduler.h>
+#include <kernel/sync.h>
+#include <arch/x86/irq.h>
 
 #define SOCK_MAX             16
 #define SOCK_RX_SLOTS        8
@@ -65,6 +69,7 @@ typedef struct {
     int      aq_r;
     int      aq_w;
     int      aq_n;
+    pid_t    waiter; /* blocked thread waiting for RX/accept/connect */
 } socket_t;
 
 static socket_t g_socks[SOCK_MAX];
@@ -77,6 +82,29 @@ static void sock_reset(socket_t *s)
         return;
     memset(s, 0, sizeof(*s));
     s->parent_sid = -1;
+    s->waiter = -1;
+}
+
+static void sock_wake_waiter(socket_t *s)
+{
+    process_t *p;
+    if (!s || s->waiter <= 0)
+        return;
+    p = process_by_tid(s->waiter);
+    s->waiter = -1;
+    if (p)
+        process_wake(p);
+}
+
+/* Deschedule until woken; short tick backup so connect/ack cannot hang forever. */
+static void sock_block_wait(socket_t *s)
+{
+    process_t *cur = process_current();
+    if (!s || !cur)
+        return;
+    s->waiter = cur->tid > 0 ? cur->tid : cur->pid;
+    process_block(irq_timer_ticks() + 2);
+    schedule();
 }
 
 void socket_init(void)
@@ -155,6 +183,7 @@ static int rx_push(socket_t *s, uint32_t src_ip, uint16_t src_port,
     memcpy(p->data, data, len);
     s->rx_w = (s->rx_w + 1) % SOCK_RX_SLOTS;
     s->rx_n++;
+    sock_wake_waiter(s);
     return 0;
 }
 
@@ -176,6 +205,7 @@ static int stream_push(socket_t *s, const void *data, size_t len)
         return -EAGAIN;
     memcpy(s->stream_rx + s->stream_rx_len, data, len);
     s->stream_rx_len += len;
+    sock_wake_waiter(s);
     return 0;
 }
 
@@ -199,6 +229,7 @@ static int acceptq_push(socket_t *listener, int child_sid)
     listener->accept_q[listener->aq_w] = child_sid;
     listener->aq_w = (listener->aq_w + 1) % SOCK_ACCEPT_SLOTS;
     listener->aq_n++;
+    sock_wake_waiter(listener);
     return 0;
 }
 
@@ -317,6 +348,7 @@ static void tcp_mark_error(socket_t *s, int err)
     if (s->state == TCP_SYN_SENT)
         s->connected = 0;
     s->state = TCP_CLOSED;
+    sock_wake_waiter(s);
 }
 
 static void tcp_try_queue_child(socket_t *child)
@@ -345,12 +377,13 @@ static void tcp_update_ack_state(socket_t *s, uint32_t ack)
     } else if (s->state == TCP_LAST_ACK && s->snd_una == s->snd_nxt) {
         tcp_mark_error(s, 0);
     }
+    sock_wake_waiter(s);
 }
 
 static int tcp_wait_connected(socket_t *s)
 {
-    int spins;
-    for (spins = 0; spins < 120000; spins++) {
+    int tries;
+    for (tries = 0; tries < 500; tries++) {
         if (s->state == TCP_ESTABLISHED)
             return 0;
         if (s->error)
@@ -358,14 +391,15 @@ static int tcp_wait_connected(socket_t *s)
         if (s->state == TCP_CLOSED)
             return -ETIMEDOUT;
         net_poll();
+        sock_block_wait(s);
     }
     return -ETIMEDOUT;
 }
 
 static int tcp_wait_ack(socket_t *s, uint32_t want_ack)
 {
-    int spins;
-    for (spins = 0; spins < 80000; spins++) {
+    int tries;
+    for (tries = 0; tries < 500; tries++) {
         if (s->snd_una >= want_ack)
             return 0;
         if (s->error)
@@ -373,19 +407,19 @@ static int tcp_wait_ack(socket_t *s, uint32_t want_ack)
         if (s->state == TCP_CLOSED)
             return -EPIPE;
         net_poll();
+        sock_block_wait(s);
     }
     return -ETIMEDOUT;
 }
 
 static int tcp_wait_accept(socket_t *s)
 {
-    int spins;
-    for (spins = 0; spins < 160000; spins++) {
+    for (;;) {
         if (s->aq_n > 0)
             return 0;
         net_poll();
+        sock_block_wait(s);
     }
-    return -EAGAIN;
 }
 
 int sock_create(int domain, int type, int protocol)
@@ -571,7 +605,6 @@ ssize_t sock_recv(int sid, void *buf, size_t len, int flags)
 {
     socket_t *s = sock_get(sid);
     int wait = !(flags & MSG_DONTWAIT);
-    int spins = 0;
     size_t got;
 
     if (!s || !buf)
@@ -587,8 +620,7 @@ ssize_t sock_recv(int sid, void *buf, size_t len, int flags)
         if (s->error)
             return s->error;
         net_poll();
-        if (++spins > 120000)
-            return -EAGAIN;
+        sock_block_wait(s);
     }
 
     got = stream_pop(s, buf, len);
@@ -656,7 +688,6 @@ ssize_t sock_recvfrom(int sid, void *buf, size_t len, int flags,
 {
     socket_t *s = sock_get(sid);
     sock_pkt_t pkt;
-    int spins = 0;
     int wait = !(flags & MSG_DONTWAIT);
 
     if (!s || !buf)
@@ -679,8 +710,7 @@ ssize_t sock_recvfrom(int sid, void *buf, size_t len, int flags,
         if (!wait)
             return -EAGAIN;
         net_poll();
-        if (++spins > 80000)
-            return -EAGAIN;
+        sock_block_wait(s);
     }
 
     if (len > pkt.len)

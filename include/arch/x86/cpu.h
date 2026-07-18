@@ -11,6 +11,9 @@ typedef struct cpu {
     int            id;       /* dense index 0..n-1 */
     uint8_t        apic_id;
     volatile int   online;
+    int            package;  /* socket/package id (0 if unknown) */
+    int            core;     /* core within package */
+    int            smt;      /* SMT/hyperthread sibling index */
     struct process *current;
     struct process *idle;
     uint32_t      *boot_stack;

@@ -4,6 +4,7 @@
 #include <kernel/initrd_store.h>
 #include <kernel/mkdx_api.h>
 #include <kernel/string.h>
+#include <kernel/sync.h>
 #include <user/gx.h>
 #include <drivers/display.h>
 #include <drivers/driver.h>
@@ -476,6 +477,9 @@ static int api_input_state(void *out)
     o->focus_id = wm_focused_id(&s->wm);
     o->hit_id = wm_hit_test(&s->wm, ms->x, ms->y);
     o->wheel = mouse_consume_wheel();
+    o->seq = input_event_seq();
+    keyboard_keys_bitmap(o->keys);
+    o->drag_id = s->wm.drag_id;
     return 0;
 }
 

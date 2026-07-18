@@ -158,17 +158,4 @@ private:
     Event ev_{};
 };
 
-/*
- * Idle helper: block until timeout (PROC_BLOCKED). Prefer over yield(0).
- * Optional Event can be signaled early by another thread/process path.
- */
-inline void wait_idle(uint32_t timeout_ticks, Event *wake = nullptr)
-{
-    if (wake && wake->ok()) {
-        (void)wake->wait(timeout_ticks == 0 ? 1u : timeout_ticks);
-        return;
-    }
-    this_thread::sleep_for(timeout_ticks == 0 ? 1u : timeout_ticks);
-}
-
 } // namespace hsrc::sdk

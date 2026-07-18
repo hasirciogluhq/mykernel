@@ -3,6 +3,7 @@
 #include <user/sdk/process.hpp>
 #include <user/sdk/settings.hpp>
 #include <user/sdk/sync.hpp>
+#include <user/sdk/thread.hpp>
 #include <user/sdk/time.hpp>
 #include <user/string.h>
 
@@ -17,8 +18,10 @@ using hsrc::sdk::Color;
 using hsrc::sdk::Input;
 using hsrc::sdk::ScreenInfo;
 using hsrc::sdk::Surface;
+using hsrc::sdk::GxDevice;
 using hsrc::sdk::Window;
 using hsrc::sdk::WindowOptions;
+using hsrc::sdk::kGxWaitForever;
 using hsrc::sdk::kChromeTitleH;
 using hsrc::sdk::kUIFontH;
 using hsrc::sdk::ui_panel_body_top;
@@ -64,6 +67,7 @@ struct PrevSample {
 };
 
 Window g_win;
+GxDevice g_gx;
 WindowOptions g_win_opts;
 ScreenInfo g_screen{};
 Input g_prev_input{};
@@ -393,8 +397,7 @@ void paint()
 
     const auto &t = theme();
     Surface &s = g_win.surface();
-    s.clear(t.bg);
-    s.draw_window_chrome(kWinW, g_win_opts.title, g_win_opts, t.chrome, t.text, t.border);
+    s.fill(0, kChromeTitleH, kWinW, kWinH - kChromeTitleH, t.bg);
 
     s.text(kPad, ui_panel_text_y(0), "Activity Monitor", t.text, 1);
 
@@ -591,14 +594,6 @@ void handle_click(const Input &in)
     if (lx < 0 || ly < 0 || lx >= g_win_opts.w || ly >= g_win_opts.h)
         return;
 
-    ChromeHit chrome = g_win.hit_chrome(lx, ly, g_win_opts);
-    if (chrome != ChromeHit::None) {
-        (void)g_win.handle_chrome_hit(chrome);
-        (void)refresh_window_options();
-        g_dirty = true;
-        return;
-    }
-
     if (end_hit(lx, ly)) {
         perform_end_task();
         return;
@@ -649,7 +644,7 @@ extern "C" void mke_main(void)
 
     if (!hsrc::sdk::screen_info(g_screen) || g_screen.width == 0 || g_screen.height == 0) {
         for (;;)
-            hsrc::sdk::wait_idle(32u);
+            hsrc::sdk::this_thread::sleep_for(1000u);
     }
 
     g_self_pid = (pid_t)hsrc::sdk::process::getpid();
@@ -677,18 +672,14 @@ extern "C" void mke_main(void)
 
     if (!g_win.create(opts))
         hsrc::sdk::exit(1);
+    if (!g_gx.create(g_win))
+        hsrc::sdk::exit(1);
     (void)refresh_window_options();
 
     g_win.show(true);
     g_win.focus();
-    paint();
-    (void)hsrc::sdk::present();
-    if (refresh_monitor(false, true))
-        g_dirty = true;
-    if (g_dirty) {
-        paint();
-        (void)hsrc::sdk::present();
-    }
+    g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+    (void)refresh_monitor(false, true);
 
     for (;;) {
         if (!g_win.ok()) {
@@ -700,13 +691,20 @@ extern "C" void mke_main(void)
         if (g_theme_poll >= kThemePollEvery) {
             g_theme_poll = 0;
             if (refresh_theme())
-                g_dirty = true;
+                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
         }
 
         (void)refresh_window_options();
 
-        Input in{};
-        if (hsrc::sdk::input(in)) {
+        uint32_t wait_to = kGxWaitForever;
+        if (g_win_opts.minimized)
+            wait_to = 200u;
+        else
+            wait_to = 40u;
+
+        Input in = g_gx.wait(wait_to);
+
+        {
             const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_input.buttons);
             if (pressed & UGX_BTN_LEFT) {
                 const bool interactive = !g_win_opts.minimized && g_win_opts.visible;
@@ -727,26 +725,15 @@ extern "C" void mke_main(void)
             if (g_need_sample || now_ns - g_last_sample_ns >= kSampleIntervalNs) {
                 g_need_sample = false;
                 g_last_sample_ns = now_ns;
-                if (refresh_monitor(true))
-                    g_dirty = true;
+                (void)refresh_monitor(true);
             }
+
+            (void)g_gx.begin_scene();
+            paint();
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
         } else {
             g_need_sample = true;
-        }
-
-        if (g_dirty && !g_win_opts.minimized) {
-            paint();
-            (void)hsrc::sdk::present();
-            hsrc::sdk::wait_idle(1u);
-        } else if (!g_win_opts.minimized && hsrc::sdk::process::map_proc_page() &&
-                   !g_need_sample) {
-            const uint32_t gen = hsrc::sdk::process::snapshot_generation();
-            if (gen == g_last_applied_gen)
-                (void)hsrc::sdk::process::wait_snapshot(gen, 5u);
-            else
-                hsrc::sdk::wait_idle(16u);
-        } else {
-            hsrc::sdk::wait_idle(g_win_opts.minimized ? 32u : 16u);
         }
     }
 }

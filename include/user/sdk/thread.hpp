@@ -17,7 +17,8 @@ constexpr uint32_t kWaitForever = 0xFFFFFFFFu;
  * - Kernel creates one **main thread** per process on spawn (tid == pid).
  * - Apps may create **N custom threads** via Thread::create (same flat AS).
  *   Cap: thread::max_per_process() (kernel PROC_THREADS_MAX); OOM → create fails.
- * - Idle / wait: prefer Event, ConditionVariable, or wait_idle — not yield(0).
+ * - Idle / wait: prefer GxDevice::wait_input or Event/CV — not yield(0)
+ *   or timed sleep polling.
  * - Blocking a thread only deschedules that thread; siblings keep running.
  * - Preemption: timer IRQ context-switches CPU hogs without voluntary yield.
  */

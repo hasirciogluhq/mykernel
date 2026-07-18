@@ -92,6 +92,9 @@ typedef struct ugx_input_state {
     int32_t focus_id;  /* -1 = none */
     int32_t hit_id;    /* topmost window under cursor, or -1 */
     int32_t wheel;     /* accumulated notches since previous input read */
+    uint32_t seq;      /* monotonic input/WM generation for SYS_INPUT_WAIT */
+    uint8_t keys[32];  /* PS/2 set-1 scancode bitmap (256 bits) */
+    int32_t drag_id;   /* window id being dragged by WM, or -1 */
 } ugx_input_state;
 
 /* ARGB helpers for userspace */

@@ -5,6 +5,7 @@
 #include <user/sdk/settings.hpp>
 #include <user/sdk/syscall.hpp>
 #include <user/sdk/sync.hpp>
+#include <user/sdk/thread.hpp>
 #include <user/sdk/time.hpp>
 #include <user/string.h>
 #include <drivers/keyboard.h>
@@ -20,8 +21,10 @@ using hsrc::sdk::ChromeHit;
 using hsrc::sdk::Input;
 using hsrc::sdk::ScreenInfo;
 using hsrc::sdk::Surface;
+using hsrc::sdk::GxDevice;
 using hsrc::sdk::Window;
 using hsrc::sdk::WindowOptions;
+using hsrc::sdk::kGxWaitForever;
 using hsrc::sdk::kChromeTitleH;
 using hsrc::sdk::ui_panel_body_top;
 using hsrc::sdk::ui_panel_text_y;
@@ -148,11 +151,11 @@ Setting g_settings[] = {
 constexpr int kSettingCount = (int)(sizeof(g_settings) / sizeof(g_settings[0]));
 
 Window g_win;
+GxDevice g_gx;
 WindowOptions g_win_opts;
 ScreenInfo g_screen{};
 Input g_prev_input{};
 bool g_dirty = true;
-bool g_need_present = false;
 int g_theme_poll = 0;
 int g_clock_poll = 0;
 int g_opts_poll = 0;
@@ -730,8 +733,7 @@ void paint()
 
     const auto &t = theme();
     Surface &s = g_win.surface();
-    s.clear(t.bg);
-    s.draw_window_chrome(kWinW, g_win_opts.title, g_win_opts, t.chrome, t.text, t.border);
+    s.fill(0, kChromeTitleH, kWinW, kWinH - kChromeTitleH, t.bg);
     draw_sidebar(s);
 
     /* Clip content band by filling over later? Simple approach: draw rows with scroll offset. */
@@ -949,7 +951,6 @@ void paint()
     (void)y_start;
     g_win.damage();
     g_dirty = false;
-    g_need_present = true;
 }
 
 int setting_row_screen_y(int idx)
@@ -1003,7 +1004,6 @@ void paint_hover_delta(int old_sidebar, int new_sidebar, int old_setting, int ne
         if (new_setting >= 0)
             paint_setting_row(s, new_setting);
     }
-    g_need_present = true;
 }
 
 void update_hover(int lx, int ly)
@@ -1036,14 +1036,6 @@ void handle_click(const Input &in)
     int ly = in.mouse_y - g_win_opts.y;
     if (lx < 0 || ly < 0 || lx >= g_win_opts.w || ly >= g_win_opts.h)
         return;
-
-    ChromeHit chrome = g_win.hit_chrome(lx, ly, g_win_opts);
-    if (chrome != ChromeHit::None) {
-        (void)g_win.handle_chrome_hit(chrome);
-        (void)refresh_window_options();
-        g_dirty = true;
-        return;
-    }
 
     const ClickTarget *hit = target_hit(lx, ly);
     if (hit && hit->kind == TARGET_SCROLLBAR) {
@@ -1092,7 +1084,7 @@ extern "C" void mke_main(void)
 
     if (!hsrc::sdk::screen_info(g_screen) || g_screen.width == 0 || g_screen.height == 0) {
         for (;;)
-            hsrc::sdk::wait_idle(32u);
+            hsrc::sdk::this_thread::sleep_for(1000u);
     }
 
     load_settings();
@@ -1119,14 +1111,15 @@ extern "C" void mke_main(void)
 
     if (!g_win.create(opts))
         hsrc::sdk::exit(1);
+    if (!g_gx.create(g_win))
+        hsrc::sdk::exit(1);
     (void)refresh_window_options();
 
     g_win.show(true);
     g_win.focus();
     if (poll_deeplink())
         (void)refresh_window_options();
-    paint();
-    (void)hsrc::sdk::present();
+    g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
 
     for (;;) {
         if (!g_win.ok()) {
@@ -1142,7 +1135,7 @@ extern "C" void mke_main(void)
         if (g_theme_poll >= kThemePollEvery) {
             g_theme_poll = 0;
             if (refresh_theme())
-                g_dirty = true;
+                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
         }
 
         if (g_active_category == CAT_DATE_TIME) {
@@ -1153,7 +1146,6 @@ extern "C" void mke_main(void)
                 if (strcmp(live, g_last_live_clock) != 0) {
                     strncpy(g_last_live_clock, live, sizeof(g_last_live_clock) - 1);
                     g_last_live_clock[sizeof(g_last_live_clock) - 1] = 0;
-                    g_dirty = true;
                 }
             }
         }
@@ -1164,10 +1156,18 @@ extern "C" void mke_main(void)
             (void)refresh_window_options();
         }
 
-        Input in{};
-        if (hsrc::sdk::input(in)) {
+        uint32_t wait_to = kGxWaitForever;
+        if (g_win_opts.minimized)
+            wait_to = 200u;
+        else if (g_drag_slider >= 0 || g_drag_scroll)
+            wait_to = 1u;
+        else if (g_active_category == CAT_DATE_TIME)
+            wait_to = 8u;
+
+        Input in = g_gx.wait(wait_to);
+
+        {
             const uint8_t btn_delta = (uint8_t)(in.buttons ^ g_prev_input.buttons);
-            /* Geometry probe on click/wheel only — not every mouse move (S16). */
             if (btn_delta || in.wheel != 0) {
                 g_opts_poll = kOptsPollEvery;
                 (void)refresh_window_options();
@@ -1218,7 +1218,6 @@ extern "C" void mke_main(void)
                 g_drag_scroll = 0;
             }
 
-            /* Side buttons: Back → previous category, Forward → next */
             if (pressed & UGX_BTN_BACK) {
                 if (g_active_category > 0) {
                     g_active_category--;
@@ -1237,16 +1236,11 @@ extern "C" void mke_main(void)
             g_prev_input = in;
         }
 
-        if (g_dirty && (!g_win_opts.minimized || deeplink_nav))
+        if (!g_win_opts.minimized || deeplink_nav) {
+            (void)g_gx.begin_scene();
             paint();
-        if (g_need_present) {
-            g_need_present = false;
-            (void)hsrc::sdk::present();
-            hsrc::sdk::wait_idle(1u);
-        } else if (g_drag_slider >= 0 || g_drag_scroll) {
-            hsrc::sdk::wait_idle(1u);
-        } else {
-            hsrc::sdk::wait_idle(g_win_opts.minimized ? 32u : 12u);
+            (void)g_gx.end_scene();
+            (void)g_gx.present();
         }
     }
 }

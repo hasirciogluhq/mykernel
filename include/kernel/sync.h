@@ -28,4 +28,24 @@ void process_block(uint64_t wake_tick);
 /* Move BLOCKED → READY; safe from IRQ / other CPU contexts. */
 void process_wake(process_t *p);
 
+/* Input / WM event wait — apps block until real work (not timed sleep). */
+#define INPUT_EV_MOVE   (1u << 0)
+#define INPUT_EV_BUTTON (1u << 1)
+#define INPUT_EV_WHEEL  (1u << 2)
+#define INPUT_EV_KEY    (1u << 3)
+#define INPUT_EV_FOCUS  (1u << 4)
+#define INPUT_EV_WM     (1u << 5)
+
+uint32_t input_event_seq(void);
+/* Called from MKDX when pointer/key/focus/wm state changes. */
+void     input_event_notify(uint32_t flags, int hit_id, int focus_id,
+                            int prev_hit_id, int wm_id);
+/* 1 once after input waiters were woken — timer should force schedule. */
+int      input_event_need_sched(void);
+/*
+ * Block until seq advances with an event relevant to win_id (-1 = any),
+ * or timeout. timeout_ticks: <0 forever, 0 try. Returns current seq.
+ */
+long     input_event_wait(int win_id, uint32_t last_seq, long timeout_ticks);
+
 #endif

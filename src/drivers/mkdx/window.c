@@ -4,6 +4,7 @@
 #include <drivers/serial.h>
 #include <kernel/heap.h>
 #include <kernel/string.h>
+#include <kernel/sync.h>
 
 static wm_window *slot_by_id(wm_t *wm, int id)
 {
@@ -242,6 +243,7 @@ wm_window *wm_create(wm_t *wm, const ugx_window_opts *opts, int owner_pid)
 void wm_destroy(wm_t *wm, int id)
 {
     wm_window *w = slot_by_id(wm, id);
+    int focus;
     if (!w)
         return;
 
@@ -254,6 +256,8 @@ void wm_destroy(wm_t *wm, int id)
         wm->drag_id = -1;
     memset(w, 0, sizeof(*w));
     gx_server_mark_dirty();
+    focus = wm_focused_id(wm);
+    input_event_notify(INPUT_EV_WM | INPUT_EV_FOCUS, -1, focus, id, id);
 }
 
 int wm_close(wm_t *wm, int id)
@@ -285,6 +289,10 @@ int wm_apply_opts(wm_t *wm, int id, const ugx_window_opts *opts)
     wm_window *w = slot_by_id(wm, id);
     int was_visible;
     int now_visible;
+    int was_min;
+    gx_rect frame;
+    int was_maximized;
+    int want_maximized;
 
     if (!wm || !w || !opts)
         return -1;
@@ -293,10 +301,10 @@ int wm_apply_opts(wm_t *wm, int id, const ugx_window_opts *opts)
     sanitize_opts(&next);
 
     was_visible = effective_visible(&w->opts);
-
-    gx_rect frame = w->frame;
-    const int was_maximized = w->opts.maximized || w->opts.fullscreen;
-    const int want_maximized = next.maximized || next.fullscreen;
+    was_min = w->opts.minimized ? 1 : 0;
+    frame = w->frame;
+    was_maximized = w->opts.maximized || w->opts.fullscreen;
+    want_maximized = next.maximized || next.fullscreen;
 
     if (want_maximized && !was_maximized) {
         w->restore_frame = w->frame;
@@ -355,6 +363,11 @@ int wm_apply_opts(wm_t *wm, int id, const ugx_window_opts *opts)
             gx_compositor_raise(wm->comp, w->layer_id);
         raise_topmost_windows(wm);
         gx_server_mark_dirty_rect(w->frame);
+    }
+
+    if (now_visible != was_visible || was_min != (w->opts.minimized ? 1 : 0) ||
+        was_maximized != want_maximized) {
+        input_event_notify(INPUT_EV_WM, id, wm_focused_id(wm), -1, id);
     }
     return 0;
 }
@@ -535,6 +548,7 @@ void wm_focus(wm_t *wm, int id)
         gx_compositor_raise(wm->comp, w->layer_id);
     raise_topmost_windows(wm);
     gx_server_mark_dirty_rect(w->frame);
+    input_event_notify(INPUT_EV_FOCUS, id, id, -1, id);
 }
 
 void wm_show(wm_t *wm, int id, int visible)
