@@ -8,17 +8,21 @@
 
 <p align="center"><em>Hobi OS — kernel'den dock'a, sıfırdan.</em></p>
 
-i386 Multiboot kernel + loadable `.kmod` drivers + usermode C++ `.mke` apps, all running under QEMU with SMP, virtio, and an actual compositor. Not a toy shell loop. A tiny OS that boots, paints windows, and lets you open ImGui for fun.
+i386 Multiboot kernel + loadable `.kmod` drivers + usermode C++ `.mke` apps. SMP. Virtio. A real compositor. We're not asking permission — this is the sport.
+
+Boots. Paints windows. Runs ImGui for fun. Cool. Don't care. Doing it anyway.
 
 ---
 
 ## Showcase
 
-Boots. Paints. Opens windows. Here's the desktop in the wild:
+Desktop in the wild. Activity Monitor flexing next to ImGui. Sexy and we know it.
 
 ![mykernel desktop](assets/showcase/os-ui.png)
 
-*More shots landing later.*
+![Activity Monitor + ImGui Demo](assets/showcase/activity-mon-plus-imgui-demo.png)
+
+*Activity Monitor + ImGui demo on MKDX*
 
 ---
 
@@ -33,7 +37,7 @@ Stuff that actually exists in the tree — no LinkedIn buzzwords:
 - **Threading + sync** — `Thread`, kernel **Event**, **ConditionVariable** (block for real, don't spin on `yield(0)`)
 - **MKDX** — window/surface compositor (layers, acrylic blur, wallpaper, drag) as a loadable module
 - **Desktop stack** — `os-ui` dock/shell, terminal, files, settings, activity-monitor
-- **imgui-demo** — Dear ImGui on a custom UGX backend, because why not
+- **ImGui rendering** — why not. Dear ImGui software-rasterized onto MKDX/ugx; display present is SW (BGA) or VirtIO-GPU scanout via PCI. Demo: `apps/imgui-demo`
 - **Driver modules (`.kmod`)** — packed into initrd; PCI, VGA, PS/2, VFS/block stack, …
 - **Virtio** — `virtio-blk` disk + `virtio-net` + DHCP / sockets
 - **VFS zoo** — fat, ext, ntfs, exfat, iso9660, tmpfs, procfs, sysfs, and friends (as loadable FS drivers)
@@ -61,7 +65,28 @@ Stuff that actually exists in the tree — no LinkedIn buzzwords:
 └─────────────────────────────────────────────────────────┘
 ```
 
-Graphics rule of thumb: **kernel owns windows & present; apps own pixels.** MKDX composes; SDK commits. No "draw a button in ring 0" nonsense.
+Graphics rule of thumb: **kernel owns windows & present; apps own pixels.** MKDX composes; SDK commits. Present is BGA/LFB (software) **or** VirtIO-GPU scanout — PCI/`display_ops` picks, apps don't. Chrome on the kernel. Client paint on MKDX/ugx. No "draw a button in ring 0" nonsense.
+
+---
+
+## ImGui rendering
+
+ImGui rendering? Sexy and we know it.
+
+Why not. Dear ImGui runs as a normal usermode `.mke` app — custom `imgui_impl_ugx` software-rasterizes draw lists into the window's MKDX/ugx client surface (under OS chrome), then the compositor presents. Not Vulkan. Not OpenGL. Pixels through ugx like any other app. Cool. Don't care. This is the sport.
+
+**Display backend — SW *or* GPU scanout. Apps don't pick.** PCI decides. `display_active()` / presence wins:
+
+- **Software** — BGA / LFB. CPU compose + present. Classic. Reliable. Pixels the hard way.
+- **GPU** — VirtIO-GPU on PCI probe. 2D scanout via `display_ops`, auto-selected by priority. Not a 3D ImGui shader backend — scanout flex only. Today.
+
+Compositor and apps stay on ugx either way. Backend swaps underfoot. Same paint path upstairs.
+
+```
+apps/imgui-demo/     # Dear ImGui + imgui_impl_ugx on MKDX/ugx
+```
+
+Open it from the dock after `make run`. Theme follows system settings. Flex optional. Results mandatory.
 
 ---
 
@@ -76,7 +101,7 @@ make clean
 make disk       # (re)build disk image helpers as needed
 ```
 
-Serial goes to your terminal. GUI is the VGA window. Smash apps from the dock like a civilized chaos agent.
+Serial goes to your terminal. GUI is the VGA window. Smash apps from the dock.
 
 Override parallelism if you want: `make JOBS=1`.
 
@@ -85,7 +110,7 @@ Override parallelism if you want: `make JOBS=1`.
 ## Project layout
 
 ```
-apps/           # imgui-demo (+ Dear ImGui)
+apps/           # imgui-demo — Dear ImGui on MKDX/ugx (software render)
 assets/         # fonts, wallpaper, icons, showcase shots
 include/        # kernel + user SDK headers
 mk/             # Makefile fragments (kernel, drivers, userapps, qemu)
@@ -100,6 +125,6 @@ tools/          # pack_initrd, pack_mke, mkfatimg, …
 
 ## Status
 
-Hobby OS. Expect sharp edges, late-night commits, and the occasional "wait that actually works?" moment. Contributions are welcome if you like pain and pixels in equal measure.
+Hobby OS. Sharp edges, late-night commits, occasional "wait that actually works?" moments. Contributions welcome if you like pain and pixels in equal measure.
 
 No root license file yet — treat it as a personal/hobby project unless one shows up.
