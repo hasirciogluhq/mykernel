@@ -1167,10 +1167,9 @@ extern "C" void mke_main(void)
             wait_to = 8u;
 
         Input in = g_gx.wait(wait_to);
-        if (g_gx.dragging())
-            continue;
+        const bool dragging = g_gx.dragging();
 
-        {
+        if (!dragging) {
             const uint8_t btn_delta = (uint8_t)(in.buttons ^ g_prev_input.buttons);
             if (btn_delta || in.wheel != 0) {
                 g_opts_poll = kOptsPollEvery;
@@ -1238,11 +1237,14 @@ extern "C" void mke_main(void)
             }
 
             g_prev_input = in;
+        } else {
+            g_prev_input = in;
         }
 
         if (deeplink_nav)
             g_dirty = true;
 
+        /* Dirty-gated paint — including during titlebar drag (live clock). */
         if ((!g_win_opts.minimized && g_dirty) || deeplink_nav) {
             (void)g_gx.begin_scene();
             paint();

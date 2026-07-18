@@ -225,7 +225,8 @@ private:
  *   gx.create(win);
  *   for (;;) {
  *     Input in = gx.wait();
- *     if (in.drag_id == win.id()) continue;
+ *     // Paint when dirty even during drag; skip mouse-move-only thrash.
+ *     if (!dirty) continue;
  *     gx.begin_scene();
  *     // client draw only
  *     gx.end_scene();
@@ -258,7 +259,7 @@ public:
     bool end_scene();
     /*
      * Publish back→front (+ chrome colors), then SYS_GX_PRESENT compose.
-     * Skips while this window is dragged.
+     * During WM drag, still publishes so live content rides the slide.
      */
     bool present();
 

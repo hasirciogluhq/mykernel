@@ -40,6 +40,8 @@ static int32_t g_last_notify_mx, g_last_notify_my;
 static int g_drag_damage;
 static gx_rect g_drag_old;
 static gx_rect g_drag_new;
+/* Publish during drag updated front — blit in place without a move slide. */
+static int g_drag_content;
 
 /* Classic arrow — 0 empty, 1 outline, 2 fill */
 static const uint8_t cursor_mask[CURSOR_H][CURSOR_W] = {
@@ -371,6 +373,15 @@ void gx_server_mark_dirty_rect(gx_rect r)
     g_server.dirty = 1;
 }
 
+void gx_server_mark_drag_content(void)
+{
+    if (!g_server.ready)
+        return;
+    if (g_server.wm.drag_id < 0)
+        return;
+    g_drag_content = 1;
+}
+
 void gx_server_mark_drag_move(gx_rect old_r, gx_rect new_r)
 {
     gx_rect screen;
@@ -510,6 +521,7 @@ static void end_drag_if_released(gx_server *s)
     cursor_erase_from_bb(s);
     gx_compositor_drag_end();
     g_drag_damage = 0;
+    g_drag_content = 0;
     /* Fold stashed app damage; prefer window frame over full-screen dirty. */
     merge_pending_into_dirty(s);
     if (!gx_rect_empty(frame))
@@ -761,6 +773,27 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
         return 0;
     }
     if (!g_drag_damage) {
+        /* Content publish with pointer idle: re-blit front at current frame. */
+        if (g_drag_content) {
+            sync_drag_fast_layer(s);
+            dw = wm_get(&s->wm, s->wm.drag_id);
+            layer_id = dw ? dw->layer_id : -1;
+            if (layer_id >= 0 && dw) {
+                new_r = dw->frame;
+                g_drag_content = 0;
+                g_frame_busy = 1;
+                gx_compositor_drag_slide(&s->comp, bb, new_r, new_r, layer_id);
+                ms = mouse_get();
+                mx = ms ? ms->x : 0;
+                my = ms ? ms->y : 0;
+                cursor_paint_at(s, mx, my);
+                present_drag_damage(s, new_r, new_r, mx, my);
+                s->frame_seq++;
+                g_frame_busy = 0;
+                return 0;
+            }
+            g_drag_content = 0;
+        }
         ms = mouse_get();
         mx = ms ? ms->x : 0;
         my = ms ? ms->y : 0;
@@ -780,6 +813,8 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
     old_r = g_drag_old;
     new_r = g_drag_new;
     g_drag_damage = 0;
+    /* Slide blits latest front — content publish rides along. */
+    g_drag_content = 0;
 
     g_frame_busy = 1;
     gx_compositor_drag_slide(&s->comp, bb, old_r, new_r, layer_id);
@@ -838,9 +873,10 @@ int gx_server_frame_tick(void)
         return -1;
     }
 
-    /* Live drag owns the frame clock — ignore sibling dirty until release. */
+    /* Live drag owns the frame clock — sibling dirty stays pending until release.
+     * Dragged-window content publish uses g_drag_content (in-place blit). */
     if (s->wm.drag_id >= 0) {
-        if (g_drag_damage) {
+        if (g_drag_damage || g_drag_content) {
             r = frame_tick_drag(s, ops);
             g_tick_depth--;
             return r;
@@ -852,7 +888,7 @@ int gx_server_frame_tick(void)
         flush_cursor_at(s, mx, my);
         flush_deferred_btn(s);
         flush_deferred_move(s);
-        if (g_drag_damage && g_tick_depth <= 3) {
+        if ((g_drag_damage || g_drag_content) && g_tick_depth <= 3) {
             r = gx_server_frame_tick();
             g_tick_depth--;
             return r;
@@ -1000,8 +1036,9 @@ int gx_server_frame_tick(void)
     end_drag_if_released(s);
     merge_pending_into_dirty(s);
 
-    /* Catch pointer hops that arrived mid-compose so drag stays glued. */
-    if (s->wm.drag_id >= 0 && g_drag_damage && g_tick_depth <= 3) {
+    /* Catch pointer hops / content publishes that arrived mid-compose. */
+    if (s->wm.drag_id >= 0 && (g_drag_damage || g_drag_content) &&
+        g_tick_depth <= 3) {
         r = gx_server_frame_tick();
         g_tick_depth--;
         return r;

@@ -26,6 +26,8 @@ void       gx_server_mark_dirty(void);
 void       gx_server_mark_dirty_rect(gx_rect r);
 /* Live window drag: two rects (old+new), never a fat union (C03/C14). */
 void       gx_server_mark_drag_move(gx_rect old_r, gx_rect new_r);
+/* App published new front pixels while dragged — refresh in place (no move). */
+void       gx_server_mark_drag_content(void);
 void       gx_server_poll_input(void);
 /* Drain PS/2 + move cursor without a full compose/present. Safe on yield. */
 void       gx_server_pump_input(void);

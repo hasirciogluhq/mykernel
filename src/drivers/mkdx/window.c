@@ -551,16 +551,13 @@ int wm_publish(wm_t *wm, int id, uint32_t chrome_bar, uint32_t chrome_title,
     gx_layer *L;
     uint32_t y;
     uint32_t row_bytes;
+    int dragging;
 
     if (!wm)
         return -1;
     w = slot_by_id(wm, id);
     if (!w || !w->back || !w->front)
         return -1;
-
-    /* During drag, front stays frozen — kernel slides existing front pixels. */
-    if (wm->drag_id == id)
-        return 0;
 
     if (chrome_set) {
         w->chrome_bar = chrome_bar;
@@ -572,6 +569,7 @@ int wm_publish(wm_t *wm, int id, uint32_t chrome_bar, uint32_t chrome_title,
     /*
      * Swapchain publish must be opaque memcpy — NOT alpha blit.
      * Alpha blit skips A=0 and leaves stale front pixels (ghost + O(n) crawl).
+     * During drag, front must still update so drag_slide blits live content.
      */
     if (w->front->width != w->back->width || w->front->height != w->back->height)
         return -1;
@@ -586,6 +584,13 @@ int wm_publish(wm_t *wm, int id, uint32_t chrome_bar, uint32_t chrome_title,
     if (L)
         L->surface = w->front;
 
+    dragging = (wm->drag_id == id);
+    if (dragging) {
+        /* Don't steal the slide frame — in-place blit on next drag tick. */
+        gx_server_mark_drag_content();
+        return 0;
+    }
+
     gx_server_mark_dirty_rect(w->frame);
     return 0;
 }
@@ -597,16 +602,13 @@ int wm_publish_rect(wm_t *wm, int id, int32_t x, int32_t y, int32_t w, int32_t h
     gx_rect local, screen;
     int32_t row;
     uint32_t row_bytes;
+    int dragging;
 
     if (!wm || w <= 0 || h <= 0)
         return -1;
     win = slot_by_id(wm, id);
     if (!win || !win->back || !win->front)
         return -1;
-
-    /* During drag, front stays frozen — kernel slides existing front pixels. */
-    if (wm->drag_id == id)
-        return 0;
 
     local = gx_rect_make(x, y, w, h);
     local = gx_rect_intersect(local,
@@ -629,6 +631,12 @@ int wm_publish_rect(wm_t *wm, int id, int32_t x, int32_t y, int32_t w, int32_t h
     L = gx_compositor_layer(wm->comp, win->layer_id);
     if (L)
         L->surface = win->front;
+
+    dragging = (wm->drag_id == id);
+    if (dragging) {
+        gx_server_mark_drag_content();
+        return 0;
+    }
 
     screen = gx_rect_make(win->frame.x + local.x, win->frame.y + local.y,
                           local.w, local.h);

@@ -197,17 +197,18 @@ extern "C" void mke_main(void)
         const uint32_t wait_to =
             g_win_opts.minimized ? 200u : kGxWaitForever;
         Input in = g_gx.wait(wait_to);
-        if (g_gx.dragging())
-            continue;
+        const bool dragging = g_gx.dragging();
 
-        /* Global input seq wakes all apps; skip compose unless this window cares. */
+        /* Global input seq wakes all apps; skip compose unless this window cares.
+         * During titlebar drag, only dirty content (not every mouse hop). */
         const bool now_relevant =
             in.hit_id == g_win.id() || in.focus_id == g_win.id();
         const bool was_relevant =
             g_prev.hit_id == g_win.id() || g_prev.focus_id == g_win.id();
-        const bool input_relevant = now_relevant || was_relevant;
+        const bool input_relevant =
+            !dragging && (now_relevant || was_relevant);
 
-        {
+        if (!dragging) {
             ImGui_ImplUgx_NewFrame(g_win, in, g_win_opts, g_prev.buttons,
                                    kChromeTitleH);
             ImGui::NewFrame();
@@ -235,12 +236,13 @@ extern "C" void mke_main(void)
 
             ImGui::Render();
             g_prev = in;
+        } else {
+            g_prev = in;
         }
 
         /*
-         * Present only when dirty or this window saw meaningful input.
-         * Avoids idle mouse-on-other-window republish/compose storms.
-         * (No continuous ImGui animations in this demo.)
+         * Present when dirty or (non-drag) meaningful input.
+         * Avoids idle mouse-on-other-window and drag-hop republish storms.
          */
         if (!g_win_opts.minimized && (g_dirty || input_relevant)) {
             (void)g_gx.begin_scene();

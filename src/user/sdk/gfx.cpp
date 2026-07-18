@@ -863,10 +863,6 @@ bool GxDevice::present()
         return true;
     scene_ready_ = 0;
 
-    /* During WM drag, kernel slides front — skip publish. */
-    if (dragging())
-        return true;
-
     if (win_ && win_->id() >= 0) {
         ugx_present_args a{};
         a.win = win_->id();

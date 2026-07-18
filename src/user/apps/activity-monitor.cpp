@@ -703,16 +703,17 @@ extern "C" void mke_main(void)
             wait_to = 40u;
 
         Input in = g_gx.wait(wait_to);
-        if (g_gx.dragging())
-            continue;
+        const bool dragging = g_gx.dragging();
 
-        {
+        if (!dragging) {
             const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_input.buttons);
             if (pressed & UGX_BTN_LEFT) {
                 const bool interactive = !g_win_opts.minimized && g_win_opts.visible;
                 if (interactive && in.hit_id == g_win.id())
                     handle_click(in);
             }
+            g_prev_input = in;
+        } else {
             g_prev_input = in;
         }
 
@@ -731,7 +732,7 @@ extern "C" void mke_main(void)
                     g_dirty = true;
             }
 
-            /* Idle/global input wakes must not republish when data unchanged. */
+            /* Dirty-gated paint — including during titlebar drag (live counters). */
             if (g_dirty) {
                 (void)g_gx.begin_scene();
                 paint();

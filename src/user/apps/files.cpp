@@ -452,10 +452,9 @@ extern "C" void mke_main(void)
         const uint32_t wait_to =
             g_win_opts.minimized ? 200u : kGxWaitForever;
         Input in = g_gx.wait(wait_to);
-        if (g_gx.dragging())
-            continue;
+        const bool dragging = g_gx.dragging();
 
-        {
+        if (!dragging) {
             const uint8_t pressed = (uint8_t)(in.buttons & ~g_prev_input.buttons);
             if (pressed & UGX_BTN_LEFT) {
                 const bool interactive = !g_win_opts.minimized && g_win_opts.visible;
@@ -463,8 +462,11 @@ extern "C" void mke_main(void)
                     handle_click(in);
             }
             g_prev_input = in;
+        } else {
+            g_prev_input = in;
         }
 
+        /* Dirty-gated paint — including during titlebar drag. */
         if (!g_win_opts.minimized && g_dirty) {
             (void)g_gx.begin_scene();
             paint();
