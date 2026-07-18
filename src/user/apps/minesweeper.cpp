@@ -28,17 +28,17 @@ using hsrc::sdk::settings::theme;
 constexpr int kCols = 9;
 constexpr int kRows = 9;
 constexpr int kMines = 10;
-constexpr int kCell = 40;
+constexpr int kCell = 42;
+constexpr int kGap = 3; /* soft gap between tiles — no chunky grid lines */
 constexpr int kPad = 16;
 constexpr int kHeaderH = 44;
 constexpr int kFooterH = 32;
-constexpr int kCellTextScale = 2;
 constexpr int kNewBtnW = 64;
 constexpr int kNewBtnH = 24;
 constexpr int kGridX = kPad;
 constexpr int kGridY = kChromeTitleH + kHeaderH;
-constexpr int kWinW = kPad * 2 + kCols * kCell;
-constexpr int kWinH = kGridY + kRows * kCell + kFooterH + kPad;
+constexpr int kWinW = kPad * 2 + kCols * kCell + (kCols - 1) * kGap;
+constexpr int kWinH = kGridY + kRows * kCell + (kRows - 1) * kGap + kFooterH + kPad;
 
 enum CellVis : uint8_t { Hidden = 0, Revealed = 1, Flagged = 2 };
 
@@ -218,9 +218,14 @@ bool cell_at(int lx, int ly, int *out_r, int *out_c)
     const int gy = ly - kGridY;
     if (gx < 0 || gy < 0)
         return false;
-    const int c = gx / kCell;
-    const int r = gy / kCell;
+    const int stride = kCell + kGap;
+    const int c = gx / stride;
+    const int r = gy / stride;
     if (r < 0 || c < 0 || r >= kRows || c >= kCols)
+        return false;
+    const int ox = gx - c * stride;
+    const int oy = gy - r * stride;
+    if (ox >= kCell || oy >= kCell)
         return false;
     *out_r = r;
     *out_c = c;
@@ -236,10 +241,77 @@ Color digit_color(int n)
     case 4: return rgb(100, 70, 180);
     case 5: return rgb(160, 80, 40);
     case 6: return rgb(40, 150, 160);
-    case 7: return rgb(40, 40, 40);
-    case 8: return rgb(120, 120, 120);
+    case 7: return rgb(50, 50, 55);
+    case 8: return rgb(110, 110, 120);
     default: return theme().text;
     }
+}
+
+/* Vector digits — scaled 8×8 bitmap looks crunchy at large cells. */
+void hbar(Surface &s, int x, int y, int w, int th, Color c)
+{
+    s.fill_round(x, y, w, th, th / 2, c);
+}
+
+void vbar(Surface &s, int x, int y, int h, int th, Color c)
+{
+    s.fill_round(x, y, th, h, th / 2, c);
+}
+
+void draw_digit(Surface &s, int cx, int cy, int digit, Color c)
+{
+    const int w = 16;
+    const int h = 24;
+    const int th = 3;
+    const int x0 = cx - w / 2;
+    const int y0 = cy - h / 2;
+    const int mid = y0 + h / 2 - th / 2;
+
+    const bool A = (digit != 1 && digit != 4);
+    const bool B = (digit != 5 && digit != 6);
+    const bool C = (digit != 2);
+    const bool D = (digit != 1 && digit != 4 && digit != 7);
+    const bool E = (digit == 2 || digit == 6 || digit == 8);
+    const bool F = (digit != 1 && digit != 2 && digit != 3 && digit != 7);
+    const bool G = (digit != 1 && digit != 7);
+
+    if (A)
+        hbar(s, x0 + th, y0, w - 2 * th, th, c);
+    if (G)
+        hbar(s, x0 + th, mid, w - 2 * th, th, c);
+    if (D)
+        hbar(s, x0 + th, y0 + h - th, w - 2 * th, th, c);
+    if (F)
+        vbar(s, x0, y0 + th, mid - y0 - th / 2, th, c);
+    if (B)
+        vbar(s, x0 + w - th, y0 + th, mid - y0 - th / 2, th, c);
+    if (E)
+        vbar(s, x0, mid + th, y0 + h - th - (mid + th), th, c);
+    if (C)
+        vbar(s, x0 + w - th, mid + th, y0 + h - th - (mid + th), th, c);
+}
+
+void draw_flag(Surface &s, int cx, int cy, Color pole, Color cloth)
+{
+    const int x = cx - 2;
+    const int y = cy - 12;
+    s.fill(x, y, 3, 24, pole);
+    s.fill(x + 3, y + 2, 12, 3, cloth);
+    s.fill(x + 3, y + 5, 10, 3, cloth);
+    s.fill(x + 3, y + 8, 7, 3, cloth);
+    s.fill(x - 3, y + 22, 10, 3, pole);
+}
+
+void draw_mine(Surface &s, int cx, int cy, Color body)
+{
+    s.fill_round(cx - 8, cy - 8, 16, 16, 8, body);
+    s.fill(cx - 2, cy - 14, 4, 28, body);
+    s.fill(cx - 14, cy - 2, 28, 4, body);
+    s.fill(cx - 10, cy - 10, 4, 4, body);
+    s.fill(cx + 6, cy - 10, 4, 4, body);
+    s.fill(cx - 10, cy + 6, 4, 4, body);
+    s.fill(cx + 6, cy + 6, 4, 4, body);
+    s.fill_round(cx - 3, cy - 3, 4, 4, 2, rgb(255, 255, 255));
 }
 
 void paint()
@@ -252,7 +324,6 @@ void paint()
 
     s.fill(0, kChromeTitleH, kWinW, kWinH - kChromeTitleH, t.bg);
 
-    /* header */
     char line[48];
     {
         int left = kMines - g_flags;
@@ -292,15 +363,14 @@ void paint()
     s.fill_round(nbx, nby, kNewBtnW, kNewBtnH, 6, t.accent);
     s.text(nbx + 16, nby + 6, "new", rgb(255, 255, 255), 1);
 
-    /* grid */
-    const int glyph = 8 * kCellTextScale;
-    const int tx = (kCell - glyph) / 2;
-    const int ty = (kCell - glyph) / 2;
+    const int stride = kCell + kGap;
     for (int r = 0; r < kRows; r++) {
         for (int c = 0; c < kCols; c++) {
-            const int x = kGridX + c * kCell;
-            const int y = kGridY + r * kCell;
+            const int x = kGridX + c * stride;
+            const int y = kGridY + r * stride;
             const CellVis vis = g_vis[r][c];
+            const int cx = x + kCell / 2;
+            const int cy = y + kCell / 2;
 
             Color fill = t.panel;
             if (vis == Revealed)
@@ -308,23 +378,16 @@ void paint()
             else if (vis == Flagged)
                 fill = t.accent_soft;
 
-            s.fill(x + 2, y + 2, kCell - 4, kCell - 4, fill);
-            s.fill(x, y, kCell, 2, t.border);
-            s.fill(x, y, 2, kCell, t.border);
-            s.fill(x + kCell - 2, y, 2, kCell, t.border);
-            s.fill(x, y + kCell - 2, kCell, 2, t.border);
+            s.fill_round(x, y, kCell, kCell, 8, fill);
 
             if (vis == Flagged) {
-                s.text(x + tx, y + ty, "F", t.danger, kCellTextScale);
+                draw_flag(s, cx, cy, t.text_dim, t.danger);
             } else if (vis == Revealed) {
-                if (g_mine[r][c]) {
-                    s.fill_round(x + 8, y + 8, kCell - 16, kCell - 16, 6, t.danger);
-                    s.text(x + tx, y + ty, "*", rgb(255, 255, 255), kCellTextScale);
-                } else if (g_adj[r][c] > 0) {
-                    char ch[2] = { (char)('0' + g_adj[r][c]), 0 };
-                    s.text(x + tx, y + ty, ch, digit_color((int)g_adj[r][c]),
-                           kCellTextScale);
-                }
+                if (g_mine[r][c])
+                    draw_mine(s, cx, cy, t.danger);
+                else if (g_adj[r][c] > 0)
+                    draw_digit(s, cx, cy, (int)g_adj[r][c],
+                               digit_color((int)g_adj[r][c]));
             }
         }
     }
