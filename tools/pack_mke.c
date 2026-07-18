@@ -1,4 +1,4 @@
-/* Host tool: wrap a flat i386 image into a .mke (MyKernel Executable). */
+/* Host tool: wrap a flat i386 image into a .mke (hsrc-kernel Executable). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

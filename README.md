@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/showcase/logo.png" alt="mykernel" width="280">
+  <img src="assets/showcase/logo.png" alt="hsrc-kernel" width="280">
 </p>
 
-<h1 align="center">mykernel</h1>
+<h1 align="center">hsrc-kernel</h1>
 
 <p align="center"><strong>bare metal. multiboot. your own damn desktop.</strong></p>
 
-<p align="center"><em>Hobi OS — kernel'den dock'a, sıfırdan.</em></p>
+<p align="center"><em>Hasırcıoğlu → <strong>HSRC</strong> → <code>hsrc-kernel</code>. Hobi OS — kernel'den dock'a, sıfırdan.</em></p>
 
 i386 Multiboot kernel + loadable `.kmod` drivers + usermode C++ `.mke` apps. SMP. Virtio. A real compositor. We're not asking permission — this is the sport.
 
@@ -18,7 +18,7 @@ Boots. Paints windows. Runs ImGui for fun. Cool. Don't care. Doing it anyway.
 
 Desktop in the wild. Activity Monitor flexing next to ImGui. Sexy and we know it.
 
-![mykernel desktop](assets/showcase/os-ui.png)
+![hsrc-kernel desktop](assets/showcase/os-ui.png)
 
 ![Activity Monitor + ImGui Demo](assets/showcase/activity-mon-plus-imgui-demo.png)
 

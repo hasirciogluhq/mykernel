@@ -2,7 +2,7 @@
 #define MYKERNEL_MKDX_H
 
 /*
- * MKDX — MyKernel Direct eXperience (loadable driver API)
+ * MKDX — Direct eXperience graphics for hsrc-kernel (loadable driver API)
  * Compositor / WM / accel live in mkdx.kmod.
  * UI is drawn by userspace via <user/gx.h>.
  */

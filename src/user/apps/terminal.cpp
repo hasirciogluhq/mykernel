@@ -1261,7 +1261,7 @@ void run_line(const char *line)
         return;
     }
     if (strcmp(s, "uname") == 0) {
-        line_push("HSRC OS mykernel i386", col_fg());
+        line_push("HSRC OS hsrc-kernel i386", col_fg());
         return;
     }
     if (cmd_is(s, "env")) {

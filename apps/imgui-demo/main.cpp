@@ -213,7 +213,7 @@ extern "C" void mke_main(void)
                                             (float)(g_win_opts.h - kChromeTitleH) -
                                                 pad * 2.0f),
                                      ImGuiCond_FirstUseEver);
-            ImGui::Begin("Hello mykernel", nullptr,
+            ImGui::Begin("Hello hsrc-kernel", nullptr,
                          ImGuiWindowFlags_NoCollapse);
             ImGui::TextUnformatted("Dear ImGui on MKDX / ugx");
             ImGui::Text("hit=%d focus=%d", (int)in.hit_id, (int)in.focus_id);

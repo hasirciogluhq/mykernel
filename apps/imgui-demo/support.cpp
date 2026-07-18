@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 
-#include "mykernel_imconfig.h"
+#include "hsrc_imconfig.h"
 #include <user/sdk/syscall.hpp>
 #include <user/sdk/thread.hpp>
 

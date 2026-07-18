@@ -58,7 +58,7 @@ static size_t proc_content(proc_node_t *node, char *buf)
         at = append_uint(buf, at, p ? (uint64_t)p->pid : 0);
         buf[at++] = '\n';
     } else if (node->kind == PROC_VERSION) {
-        memcpy(buf, "mykernel\n", 9); at = 9;
+        memcpy(buf, "hsrc-kernel\n", 12); at = 12;
     }
     return at;
 }

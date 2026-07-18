@@ -1,2 +1,2 @@
 #pragma once
-#include "../../mykernel_imconfig.h"
+#include "../../hsrc_imconfig.h"
