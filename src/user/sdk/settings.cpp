@@ -14,6 +14,7 @@ constexpr const char *kSettingsClass = "os.settings";
 constexpr const char *kSettingsPath = "/applications/os-settings.mke";
 constexpr const char *kRunDir = "/run";
 constexpr const char *kDeepLinkPath = "/run/settings.deeplink";
+constexpr const char *kThemeGenPath = "/run/os-theme.gen";
 constexpr const char *kDefaultDeepLink = "settings://general";
 constexpr const char *kIniPath = "/etc/os-settings.ini";
 constexpr const char *kAppearanceKey = "general.appearance";
@@ -37,7 +38,10 @@ bool g_theme_loaded = false;
 bool g_ini_present = false;
 /* Skip re-open storms while the ini is known-missing. */
 unsigned g_absent_skip = 0;
-constexpr unsigned kAbsentRetryEvery = 256; /* refresh_theme calls while missing */
+constexpr unsigned kAbsentRetryEvery = 64; /* rare retry while missing */
+/* Last /run/os-theme.gen value this process applied (cross-process wake). */
+uint32_t g_seen_theme_gen = 0;
+bool g_seen_theme_gen_valid = false;
 constexpr const char *kDefaultIni =
     "general.appearance=Light\n"
     "desktop.dock-size=Medium\n"
@@ -203,6 +207,57 @@ void apply_theme(Appearance appearance)
     g_appearance = appearance;
     g_theme_mode = resolve_mode(appearance);
     g_theme_loaded = true;
+}
+
+uint32_t read_theme_gen(void)
+{
+    int fd = (int)hsrc::sdk::open(kThemeGenPath, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    char buf[16];
+    memset(buf, 0, sizeof(buf));
+    long n = hsrc::sdk::read(fd, buf, sizeof(buf) - 1);
+    (void)hsrc::sdk::close(fd);
+    if (n <= 0)
+        return 0;
+    uint32_t v = 0;
+    for (long i = 0; i < n; i++) {
+        if (buf[i] < '0' || buf[i] > '9')
+            break;
+        v = v * 10u + (uint32_t)(buf[i] - '0');
+    }
+    return v;
+}
+
+void bump_theme_gen(void)
+{
+    uint32_t next = read_theme_gen() + 1u;
+    if (next == 0)
+        next = 1;
+    (void)hsrc::sdk::mkdir(kRunDir, 0755);
+    int fd = (int)hsrc::sdk::open(kThemeGenPath, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0)
+        return;
+    char buf[16];
+    int n = 0;
+    uint32_t v = next;
+    char tmp[12];
+    int t = 0;
+    if (v == 0)
+        tmp[t++] = '0';
+    else {
+        while (v > 0 && t < (int)sizeof(tmp)) {
+            tmp[t++] = (char)('0' + (v % 10u));
+            v /= 10u;
+        }
+    }
+    while (t > 0 && n < (int)sizeof(buf) - 1)
+        buf[n++] = tmp[--t];
+    buf[n] = 0;
+    (void)hsrc::sdk::write(fd, buf, (size_t)n);
+    (void)hsrc::sdk::close(fd);
+    g_seen_theme_gen = next;
+    g_seen_theme_gen_valid = true;
 }
 
 void load_theme_from_disk(bool create_if_missing)
@@ -532,14 +587,17 @@ const AppTheme &theme()
 bool refresh_theme()
 {
     /*
-     * Apps poll this from their frame loops. A missing /etc/os-settings.ini
-     * used to be re-opened every few yields → VFS + serial spam starved input.
-     * Seed a default file once; while still absent, negative-cache hard.
-     * When the file exists, each explicit refresh_theme() re-reads (callers
-     * already throttle via kThemePollEvery).
+     * Cheap cross-process watch: /run/os-theme.gen bumps when appearance is
+     * written. Unchanged gen → no VFS re-read of the full ini.
      */
+    uint32_t gen = read_theme_gen();
+    if (g_theme_loaded && g_seen_theme_gen_valid && gen == g_seen_theme_gen)
+        return false;
+
     if (!g_theme_loaded) {
         load_theme_from_disk(true);
+        g_seen_theme_gen = gen;
+        g_seen_theme_gen_valid = true;
         g_absent_skip = 0;
         return true;
     }
@@ -547,6 +605,8 @@ bool refresh_theme()
     if (!g_ini_present) {
         if (g_absent_skip + 1 < kAbsentRetryEvery) {
             g_absent_skip++;
+            g_seen_theme_gen = gen;
+            g_seen_theme_gen_valid = true;
             return false;
         }
         g_absent_skip = 0;
@@ -555,6 +615,8 @@ bool refresh_theme()
     Appearance prev_appearance = g_appearance;
     ThemeMode prev_mode = g_theme_mode;
     load_theme_from_disk(!g_ini_present);
+    g_seen_theme_gen = gen;
+    g_seen_theme_gen_valid = true;
     if (g_ini_present)
         g_absent_skip = 0;
     return prev_mode != g_theme_mode || prev_appearance != g_appearance;
@@ -571,6 +633,7 @@ bool set_appearance(Appearance appearance)
         return false;
     apply_theme(appearance);
     g_ini_present = true;
+    /* upsert already bumped gen for appearance; keep seen in sync. */
     return true;
 }
 

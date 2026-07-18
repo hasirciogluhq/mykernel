@@ -59,7 +59,7 @@ bool set_appearance(Appearance appearance);
 /* Toggle Light ↔ Dark (Auto becomes Dark). */
 bool toggle_theme();
 
-/* Re-read /etc/os-settings.ini (throttled + cached). Returns true if theme changed. */
+/* Re-read theme when /run/os-theme.gen advances (cheap; safe every frame). */
 bool refresh_theme();
 
 /* Placeholder status for menubar indicators (ini stubs until real drivers). */

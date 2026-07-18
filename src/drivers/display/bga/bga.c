@@ -201,25 +201,19 @@ static int bga_present(const uint32_t *src, uint32_t src_stride_px)
     return 0;
 }
 
-static int bga_present_rect(const uint32_t *src, uint32_t src_stride_px,
-                            uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+/*
+ * Partial / drag updates write the *visible* front page so the pointer stays
+ * live between full flips. Full frames use bga_present() + flip.
+ */
+static void bga_copy_rect(const uint32_t *src, uint32_t src_stride_px,
+                          uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     uint32_t row;
-    if (!g_ready || !src || w == 0 || h == 0)
-        return -1;
-    if (x >= g_mode.width || y >= g_mode.height)
-        return -1;
-    if (x + w > g_mode.width)
-        w = g_mode.width - x;
-    if (y + h > g_mode.height)
-        h = g_mode.height - y;
 
-    /*
-     * Cursor / partial updates write the *visible* front page so the pointer
-     * stays live between full flips. Full frames use bga_present() + flip.
-     */
     for (row = 0; row < h; row++) {
         const uint32_t *srow = src + (y + row) * src_stride_px + x;
+        if ((row & 7) == 0)
+            ps2_poll();
         if (g_mode.bytes_per_pixel == 4) {
             volatile uint32_t *base = g_flip_ok ? bga_page_ptr(g_front_page)
                                                 : (volatile uint32_t *)g_mode.addr;
@@ -247,6 +241,51 @@ static int bga_present_rect(const uint32_t *src, uint32_t src_stride_px,
             }
         }
     }
+}
+
+static int bga_clip_rect(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h)
+{
+    if (*w == 0 || *h == 0)
+        return -1;
+    if (*x >= g_mode.width || *y >= g_mode.height)
+        return -1;
+    if (*x + *w > g_mode.width)
+        *w = g_mode.width - *x;
+    if (*y + *h > g_mode.height)
+        *h = g_mode.height - *y;
+    return (*w == 0 || *h == 0) ? -1 : 0;
+}
+
+static int bga_present_rect(const uint32_t *src, uint32_t src_stride_px,
+                            uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    if (!g_ready || !src)
+        return -1;
+    if (bga_clip_rect(&x, &y, &w, &h) < 0)
+        return -1;
+    bga_copy_rect(src, src_stride_px, x, y, w, h);
+    return 0;
+}
+
+/*
+ * Drag path parity with virtio present_rects: copy all damage rects in one
+ * call so the server never falls back to N separate present_rect entries
+ * (and we keep a single tight PS/2 poll cadence across the batch).
+ */
+static int bga_present_rects(const uint32_t *src, uint32_t src_stride_px,
+                             const display_rect_t *rects, uint32_t n)
+{
+    uint32_t i;
+
+    if (!g_ready || !src || !rects || n == 0)
+        return -1;
+
+    for (i = 0; i < n; i++) {
+        uint32_t x = rects[i].x, y = rects[i].y, w = rects[i].w, h = rects[i].h;
+        if (bga_clip_rect(&x, &y, &w, &h) < 0)
+            continue;
+        bga_copy_rect(src, src_stride_px, x, y, w, h);
+    }
     return 0;
 }
 
@@ -271,6 +310,7 @@ static int bga_drv_init(driver_t *drv, void *ctx)
     g_ops.get_mode = bga_get_mode;
     g_ops.present = bga_present;
     g_ops.present_rect = bga_present_rect;
+    g_ops.present_rects = bga_present_rects;
     g_ops.gpu_submit = NULL;
     return display_register(&g_ops, DISPLAY_PRIO_BGA);
 }
