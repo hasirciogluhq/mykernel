@@ -59,9 +59,13 @@ gx_layer *gx_compositor_layer(gx_compositor *c, int id);
 void gx_compositor_raise(gx_compositor *c, int id);
 /* Live drag: opaque slide (no acrylic rebuild); corner mask kept. -1 = off. */
 void gx_compositor_set_drag_layer(int layer_id);
-/* Sprite drag: save underlay, restore old, capture new, blit window. */
+/* Sprite drag: save underlay, restore old, capture new, blit window.
+ * seed_extra: optional sibling-dirty rect to include in live reseed (empty = none). */
 void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,
-                              gx_rect old_r, gx_rect new_r, int layer_id);
+                              gx_rect old_r, gx_rect new_r, int layer_id,
+                              gx_rect seed_extra);
+/* Sibling published during drag — drop cached underlay (reseed on next slide). */
+void gx_compositor_drag_invalidate_underlay(void);
 void gx_compositor_drag_end(void);
 void gx_compositor_compose(gx_compositor *c);
 /* Compose only inside clip into dst (cursor-free scene). clip empty → no-op. */

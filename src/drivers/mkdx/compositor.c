@@ -23,6 +23,12 @@ void gx_compositor_drag_end(void)
     s_drag_fast_layer = -1;
 }
 
+void gx_compositor_drag_invalidate_underlay(void)
+{
+    /* Stale save-under freezes siblings after uncover; force live reseed. */
+    s_drag_under_ready = 0;
+}
+
 static int alloc_slot(gx_compositor *c)
 {
     for (int i = 0; i < GX_MAX_LAYERS; i++) {
@@ -777,11 +783,13 @@ static void underlay_scroll(gx_surface *tile, int32_t dx, int32_t dy,
 }
 
 void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,
-                              gx_rect old_r, gx_rect new_r, int layer_id)
+                              gx_rect old_r, gx_rect new_r, int layer_id,
+                              gx_rect seed_extra)
 {
     gx_layer *L;
     gx_rect screen;
     gx_rect inter;
+    gx_rect seed;
     int was_vis;
     int32_t dx, dy;
 
@@ -795,6 +803,7 @@ void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,
     screen = gx_rect_make(0, 0, (int32_t)dst->width, (int32_t)dst->height);
     old_r = gx_rect_intersect(old_r, screen);
     new_r = gx_rect_intersect(new_r, screen);
+    seed_extra = gx_rect_intersect(seed_extra, screen);
     if (gx_rect_empty(new_r))
         return;
 
@@ -802,34 +811,37 @@ void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,
         return;
 
     /*
-     * Layer bounds already at new_r, but bb still shows the window at old_r.
-     * First tick: compose under old_r (layer hidden) to seed the underlay and
-     * erase the ghost — one correct peek, then pure memcpy slides.
+     * Reseed (first tick or after sibling invalidate): compose live layers
+     * over old∪new∪seed_extra with the drag layer hidden, capture underlay
+     * at new_r, then blit the window. Never copy uncomposed bb strips into
+     * the underlay — that froze/corrupted siblings after uncover.
      */
     if (!s_drag_under_ready) {
         if (gx_rect_empty(old_r))
             old_r = new_r;
+        seed = gx_rect_union(old_r, new_r);
+        if (!gx_rect_empty(seed_extra))
+            seed = gx_rect_union(seed, seed_extra);
         was_vis = L->visible;
         L->visible = 0;
-        gx_compositor_compose_rect(c, dst, old_r);
-        copy_rect_from_bb(s_drag_under, dst, old_r);
+        gx_compositor_compose_rect(c, dst, seed);
+        copy_rect_from_bb(s_drag_under, dst, new_r);
         L->visible = was_vis;
         s_drag_under_ready = 1;
-
-        if (old_r.x == new_r.x && old_r.y == new_r.y &&
-            old_r.w == new_r.w && old_r.h == new_r.h) {
-            drag_blit_layer(dst, L, new_r);
-            return;
-        }
-        /* old already restored by compose — capture dest + paint. */
-        copy_rect_from_bb(s_drag_under, dst, new_r);
         drag_blit_layer(dst, L, new_r);
         return;
     }
 
     if (old_r.w != new_r.w || old_r.h != new_r.h || gx_rect_empty(old_r)) {
         s_drag_under_ready = 0;
-        gx_compositor_drag_slide(c, dst, old_r, new_r, layer_id);
+        gx_compositor_drag_slide(c, dst, old_r, new_r, layer_id, seed_extra);
+        return;
+    }
+
+    /* Sibling dirty while underlay still marked ready — force live reseed. */
+    if (!gx_rect_empty(seed_extra)) {
+        s_drag_under_ready = 0;
+        gx_compositor_drag_slide(c, dst, old_r, new_r, layer_id, seed_extra);
         return;
     }
 
@@ -837,10 +849,14 @@ void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,
     dy = new_r.y - old_r.y;
     inter = gx_rect_intersect(old_r, new_r);
 
-    /* Disjoint jump: full restore + capture (rare during coalesced drag). */
+    /* Disjoint jump: restore old from underlay, live-compose new underlay. */
     if (gx_rect_empty(inter)) {
         copy_rect_to_bb(dst, old_r, s_drag_under);
+        was_vis = L->visible;
+        L->visible = 0;
+        gx_compositor_compose_rect(c, dst, new_r);
         copy_rect_from_bb(s_drag_under, dst, new_r);
+        L->visible = was_vis;
         drag_blit_layer(dst, L, new_r);
         return;
     }

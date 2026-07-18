@@ -248,25 +248,28 @@ static void present_rect_list(gx_server *s, const gx_rect *rs, int n)
 /*
  * Drag scanout damage: never present a multi-hop trail AABB.
  * Small moves → one union rect; large jumps → old + new (+ cursor).
+ * extra: sibling dirty absorbed this tick (may be empty).
  */
 static void present_drag_damage(gx_server *s, gx_rect old_r, gx_rect new_r,
-                                int32_t mx, int32_t my)
+                                int32_t mx, int32_t my, gx_rect extra)
 {
     gx_rect cur = gx_rect_make(mx, my, CURSOR_W, CURSOR_H);
     gx_rect uni, inter;
-    gx_rect rs[4];
+    gx_rect rs[5];
     int n = 0;
     int32_t a_uni, a_parts;
 
     uni = gx_rect_union(old_r, new_r);
     uni = gx_rect_union(uni, cur);
+    if (!gx_rect_empty(extra))
+        uni = gx_rect_union(uni, extra);
     if (gx_rect_empty(uni))
         return;
 
     inter = gx_rect_intersect(old_r, new_r);
     a_uni = gx_rect_area(uni);
     a_parts = gx_rect_area(old_r) + gx_rect_area(new_r) - gx_rect_area(inter)
-              + gx_rect_area(cur);
+              + gx_rect_area(cur) + gx_rect_area(extra);
 
     /* Union is tight enough (typical small pointer hops). */
     if (a_uni <= a_parts + (a_parts >> 2)) {
@@ -278,6 +281,8 @@ static void present_drag_damage(gx_server *s, gx_rect old_r, gx_rect new_r,
         rs[n++] = old_r;
     if (!gx_rect_empty(new_r))
         rs[n++] = new_r;
+    if (!gx_rect_empty(extra))
+        rs[n++] = extra;
     if (!gx_rect_empty(cur))
         rs[n++] = cur;
     present_rect_list(s, rs, n);
@@ -287,6 +292,9 @@ static void pending_mark_full(void)
 {
     g_pending_dirty = 1;
     g_pending_full = 1;
+    /* Sibling/full damage during drag — underlay pixels are no longer valid. */
+    if (g_server.wm.drag_id >= 0)
+        gx_compositor_drag_invalidate_underlay();
 }
 
 static void pending_mark_rect(gx_rect r)
@@ -295,6 +303,8 @@ static void pending_mark_rect(gx_rect r)
 
     if (g_pending_full) {
         g_pending_dirty = 1;
+        if (g_server.wm.drag_id >= 0)
+            gx_compositor_drag_invalidate_underlay();
         return;
     }
     screen = gx_rect_make(0, 0, (int32_t)g_server.device.mode.width,
@@ -307,6 +317,8 @@ static void pending_mark_rect(gx_rect r)
     else
         g_pending_rect = gx_rect_union(g_pending_rect, r);
     g_pending_dirty = 1;
+    if (g_server.wm.drag_id >= 0)
+        gx_compositor_drag_invalidate_underlay();
 }
 
 static void merge_pending_into_dirty(gx_server *s)
@@ -327,7 +339,7 @@ void gx_server_mark_dirty(void)
 {
     if (!g_server.ready)
         return;
-    /* App repaints during drag stay pending — don't steal the slide frame. */
+    /* App/sibling damage during drag → pending + underlay invalidate. */
     if (g_frame_busy || g_server.wm.drag_id >= 0) {
         pending_mark_full();
         return;
@@ -344,7 +356,7 @@ void gx_server_mark_dirty_rect(gx_rect r)
 
     if (!g_server.ready)
         return;
-    /* Sibling/app damage during drag → pending; release flush restores frost. */
+    /* Sibling/app damage during drag → pending + underlay invalidate. */
     if (g_frame_busy || g_server.wm.drag_id >= 0) {
         pending_mark_rect(r);
         return;
@@ -522,7 +534,7 @@ static void end_drag_if_released(gx_server *s)
     gx_compositor_drag_end();
     g_drag_damage = 0;
     g_drag_content = 0;
-    /* Fold stashed app damage; prefer window frame over full-screen dirty. */
+    /* Fold any leftover pending; prefer window frame over full-screen dirty. */
     merge_pending_into_dirty(s);
     if (!gx_rect_empty(frame))
         gx_server_mark_dirty_rect(frame);
@@ -735,6 +747,8 @@ static void present_full_frame(gx_server *s, display_ops_t *ops,
 /*
  * Live drag: one coalesced slide to the pointer tip, then a tight present.
  * Multi-hop trail unions were presenting a path AABB every frame (~1 FPS).
+ * Sibling publishes invalidate underlay and are absorbed into this tick's
+ * live reseed (seed_extra) — not deferred until button-up.
  */
 static int frame_tick_drag(gx_server *s, display_ops_t *ops)
 {
@@ -742,12 +756,16 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
     gx_surface *bb = s->device.backbuffer;
     gx_rect old_r;
     gx_rect new_r;
+    gx_rect seed_extra;
     wm_window *dw;
     int layer_id = -1;
     int32_t mx, my;
+    int had_pending = 0;
 
     if (!bb || !ops)
         return -1;
+
+    seed_extra = gx_rect_make(0, 0, 0, 0);
 
     sync_drag_fast_layer(s);
     dw = wm_get(&s->wm, s->wm.drag_id);
@@ -772,9 +790,24 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
             return gx_server_frame_tick();
         return 0;
     }
+
+    /* Fold sibling damage into this slide's live reseed rect. */
+    if (g_pending_dirty) {
+        had_pending = 1;
+        if (g_pending_full) {
+            seed_extra = gx_rect_make(0, 0, (int32_t)bb->width, (int32_t)bb->height);
+        } else {
+            seed_extra = g_pending_rect;
+        }
+        g_pending_dirty = 0;
+        g_pending_full = 0;
+        g_pending_rect = gx_rect_make(0, 0, 0, 0);
+        gx_compositor_drag_invalidate_underlay();
+    }
+
     if (!g_drag_damage) {
-        /* Content publish with pointer idle: re-blit front at current frame. */
-        if (g_drag_content) {
+        /* Content publish and/or sibling dirty with pointer idle. */
+        if (g_drag_content || had_pending) {
             sync_drag_fast_layer(s);
             dw = wm_get(&s->wm, s->wm.drag_id);
             layer_id = dw ? dw->layer_id : -1;
@@ -782,12 +815,13 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
                 new_r = dw->frame;
                 g_drag_content = 0;
                 g_frame_busy = 1;
-                gx_compositor_drag_slide(&s->comp, bb, new_r, new_r, layer_id);
+                gx_compositor_drag_slide(&s->comp, bb, new_r, new_r, layer_id,
+                                         seed_extra);
                 ms = mouse_get();
                 mx = ms ? ms->x : 0;
                 my = ms ? ms->y : 0;
                 cursor_paint_at(s, mx, my);
-                present_drag_damage(s, new_r, new_r, mx, my);
+                present_drag_damage(s, new_r, new_r, mx, my, seed_extra);
                 s->frame_seq++;
                 g_frame_busy = 0;
                 return 0;
@@ -817,14 +851,14 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
     g_drag_content = 0;
 
     g_frame_busy = 1;
-    gx_compositor_drag_slide(&s->comp, bb, old_r, new_r, layer_id);
+    gx_compositor_drag_slide(&s->comp, bb, old_r, new_r, layer_id, seed_extra);
 
     ms = mouse_get();
     mx = ms ? ms->x : 0;
     my = ms ? ms->y : 0;
     cursor_paint_at(s, mx, my);
 
-    present_drag_damage(s, old_r, new_r, mx, my);
+    present_drag_damage(s, old_r, new_r, mx, my, seed_extra);
 
     s->frame_seq++;
     g_frame_busy = 0;
@@ -873,10 +907,11 @@ int gx_server_frame_tick(void)
         return -1;
     }
 
-    /* Live drag owns the frame clock — sibling dirty stays pending until release.
+    /* Live drag owns move slides; sibling dirty is absorbed into the next
+     * drag tick (underlay reseed) instead of freezing until release.
      * Dragged-window content publish uses g_drag_content (in-place blit). */
     if (s->wm.drag_id >= 0) {
-        if (g_drag_damage || g_drag_content) {
+        if (g_drag_damage || g_drag_content || g_pending_dirty) {
             r = frame_tick_drag(s, ops);
             g_tick_depth--;
             return r;
@@ -888,7 +923,8 @@ int gx_server_frame_tick(void)
         flush_cursor_at(s, mx, my);
         flush_deferred_btn(s);
         flush_deferred_move(s);
-        if ((g_drag_damage || g_drag_content) && g_tick_depth <= 3) {
+        if ((g_drag_damage || g_drag_content || g_pending_dirty) &&
+            g_tick_depth <= 3) {
             r = gx_server_frame_tick();
             g_tick_depth--;
             return r;

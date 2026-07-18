@@ -690,7 +690,7 @@ extern "C" void mke_main(void)
 
         (void)refresh_window_options();
 
-        uint32_t wait_to = kThemeWaitTicks;
+        uint32_t wait_to = hsrc::sdk::settings::kThemeWaitTicks;
         if (g_win_opts.minimized)
             wait_to = 200u;
 
