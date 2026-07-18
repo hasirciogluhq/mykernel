@@ -6,7 +6,7 @@
 
 <p align="center"><strong>bare metal. multiboot. your own damn desktop.</strong></p>
 
-<p align="center"><em>Hasırcıoğlu → <strong>HSRC</strong> → <code>hsrc-kernel</code>. Hobi OS — kernel'den dock'a, sıfırdan.</em></p>
+<p align="center"><em>Hobby OS — kernel to dock, from scratch.</em></p>
 
 i386 Multiboot kernel + loadable `.kmod` drivers + usermode C++ `.mke` apps. SMP. Virtio. A real compositor. We're not asking permission — this is the sport.
 
