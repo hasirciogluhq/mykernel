@@ -171,7 +171,7 @@ void paint()
     }
 
     if (full) {
-        g_win.damage();
+        /* Present publishes back→front; no extra Window::damage (avoids 2× memcpy). */
     } else {
         /* Damage only the text band from first dirty line through prompt. */
         int dirty_start = g_damage_line < start ? start : g_damage_line;
@@ -181,7 +181,6 @@ void paint()
             ly0 = kChromeTitleH;
         (void)ly0;
         (void)ly1;
-        g_win.damage();
     }
     g_dirty = false;
     /* Next keystroke only dirties the prompt; new lines set g_damage_line. */
@@ -1506,6 +1505,7 @@ extern "C" void mke_main(void)
             g_theme_poll = 0;
             if (refresh_theme()) {
                 g_damage_line = -1;
+                g_dirty = true;
                 g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
             }
         }
@@ -1538,7 +1538,8 @@ extern "C" void mke_main(void)
             }
         }
 
-        if (!g_win_opts.minimized) {
+        /* Idle wakes (mouse on other windows) must not republish/compose. */
+        if (!g_win_opts.minimized && g_dirty) {
             (void)g_gx.begin_scene();
             paint();
             (void)g_gx.end_scene();

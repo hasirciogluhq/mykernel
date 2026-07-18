@@ -519,9 +519,7 @@ void paint()
     const bool can_next = g_scroll + kVisibleRows < g_entry_count;
     s.text(kWinW - 120, kWinH - 16, can_prev ? "prev" : "    ", t.text_dim, 1);
     s.text(kWinW - 60, kWinH - 16, can_next ? "next" : "    ", t.text_dim, 1);
-
-    g_win.damage();
-    g_dirty = false;
+    /* Present publishes once — no Window::damage here. */
 }
 
 int row_hit(int lx, int ly)
@@ -690,8 +688,10 @@ extern "C" void mke_main(void)
         g_theme_poll++;
         if (g_theme_poll >= kThemePollEvery) {
             g_theme_poll = 0;
-            if (refresh_theme())
+            if (refresh_theme()) {
                 g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+                g_dirty = true;
+            }
         }
 
         (void)refresh_window_options();
@@ -727,13 +727,18 @@ extern "C" void mke_main(void)
             if (g_need_sample || now_ns - g_last_sample_ns >= kSampleIntervalNs) {
                 g_need_sample = false;
                 g_last_sample_ns = now_ns;
-                (void)refresh_monitor(true);
+                if (refresh_monitor(true))
+                    g_dirty = true;
             }
 
-            (void)g_gx.begin_scene();
-            paint();
-            (void)g_gx.end_scene();
-            (void)g_gx.present();
+            /* Idle/global input wakes must not republish when data unchanged. */
+            if (g_dirty) {
+                (void)g_gx.begin_scene();
+                paint();
+                (void)g_gx.end_scene();
+                (void)g_gx.present();
+                g_dirty = false;
+            }
         } else {
             g_need_sample = true;
         }

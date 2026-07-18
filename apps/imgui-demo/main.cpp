@@ -37,12 +37,17 @@ ScreenInfo g_screen{};
 Input g_prev{};
 int g_clicks = 0;
 bool g_imgui_ready = false;
+bool g_dirty = true;
+bool g_was_minimized = false;
 int g_theme_poll = 0;
 
 bool refresh_window_options()
 {
     if (!g_win.get_options(g_win_opts))
         return false;
+    if (g_was_minimized && !g_win_opts.minimized && g_win_opts.visible)
+        g_dirty = true;
+    g_was_minimized = g_win_opts.minimized;
     return true;
 }
 
@@ -96,7 +101,7 @@ void paint()
     s.fill(0, kChromeTitleH, g_win_opts.w, g_win_opts.h - kChromeTitleH, t.bg);
 
     ImGui_ImplUgx_RenderDrawData(ImGui::GetDrawData(), s, kChromeTitleH);
-    g_win.damage();
+    /* Present publishes once — no Window::damage here. */
 }
 
 } // namespace
@@ -183,6 +188,7 @@ extern "C" void mke_main(void)
             if (refresh_theme()) {
                 apply_imgui_theme();
                 g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+                g_dirty = true;
             }
         }
 
@@ -193,6 +199,13 @@ extern "C" void mke_main(void)
         Input in = g_gx.wait(wait_to);
         if (g_gx.dragging())
             continue;
+
+        /* Global input seq wakes all apps; skip compose unless this window cares. */
+        const bool now_relevant =
+            in.hit_id == g_win.id() || in.focus_id == g_win.id();
+        const bool was_relevant =
+            g_prev.hit_id == g_win.id() || g_prev.focus_id == g_win.id();
+        const bool input_relevant = now_relevant || was_relevant;
 
         {
             ImGui_ImplUgx_NewFrame(g_win, in, g_win_opts, g_prev.buttons,
@@ -224,11 +237,17 @@ extern "C" void mke_main(void)
             g_prev = in;
         }
 
-        if (!g_win_opts.minimized) {
+        /*
+         * Present only when dirty or this window saw meaningful input.
+         * Avoids idle mouse-on-other-window republish/compose storms.
+         * (No continuous ImGui animations in this demo.)
+         */
+        if (!g_win_opts.minimized && (g_dirty || input_relevant)) {
             (void)g_gx.begin_scene();
             paint();
             (void)g_gx.end_scene();
             (void)g_gx.present();
+            g_dirty = false;
         }
     }
 }

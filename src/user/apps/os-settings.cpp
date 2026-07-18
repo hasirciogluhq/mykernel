@@ -949,7 +949,6 @@ void paint()
     draw_scrollbar(s);
 
     (void)y_start;
-    g_win.damage();
     g_dirty = false;
 }
 
@@ -1134,8 +1133,10 @@ extern "C" void mke_main(void)
         g_theme_poll++;
         if (g_theme_poll >= kThemePollEvery) {
             g_theme_poll = 0;
-            if (refresh_theme())
+            if (refresh_theme()) {
                 g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+                g_dirty = true;
+            }
         }
 
         if (g_active_category == CAT_DATE_TIME) {
@@ -1146,6 +1147,7 @@ extern "C" void mke_main(void)
                 if (strcmp(live, g_last_live_clock) != 0) {
                     strncpy(g_last_live_clock, live, sizeof(g_last_live_clock) - 1);
                     g_last_live_clock[sizeof(g_last_live_clock) - 1] = 0;
+                    g_dirty = true;
                 }
             }
         }
@@ -1238,7 +1240,10 @@ extern "C" void mke_main(void)
             g_prev_input = in;
         }
 
-        if (!g_win_opts.minimized || deeplink_nav) {
+        if (deeplink_nav)
+            g_dirty = true;
+
+        if ((!g_win_opts.minimized && g_dirty) || deeplink_nav) {
             (void)g_gx.begin_scene();
             paint();
             (void)g_gx.end_scene();

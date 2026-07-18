@@ -287,7 +287,6 @@ void paint()
     s.text(kWinW - 120, kWinH - 20, can_prev ? "prev" : "    ", t.text_dim, 1);
     s.text(kWinW - 60, kWinH - 20, can_next ? "next" : "    ", t.text_dim, 1);
 
-    g_win.damage();
     g_dirty = false;
 }
 
@@ -442,8 +441,10 @@ extern "C" void mke_main(void)
         g_theme_poll++;
         if (g_theme_poll >= kThemePollEvery) {
             g_theme_poll = 0;
-            if (refresh_theme())
+            if (refresh_theme()) {
                 g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+                g_dirty = true;
+            }
         }
 
         (void)refresh_window_options();
@@ -464,7 +465,7 @@ extern "C" void mke_main(void)
             g_prev_input = in;
         }
 
-        if (!g_win_opts.minimized) {
+        if (!g_win_opts.minimized && g_dirty) {
             (void)g_gx.begin_scene();
             paint();
             (void)g_gx.end_scene();
