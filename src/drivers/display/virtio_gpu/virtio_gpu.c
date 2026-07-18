@@ -195,10 +195,9 @@ static int gpu_setup_scanout(uint32_t width, uint32_t height)
     return 0;
 }
 
-static int gpu_transfer_flush(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+static int gpu_transfer(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     virtio_gpu_transfer_to_host_2d_t xfer;
-    virtio_gpu_resource_flush_t flush;
 
     if (w == 0 || h == 0)
         return 0;
@@ -211,16 +210,50 @@ static int gpu_transfer_flush(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
     xfer.r.height = h;
     xfer.offset = ((uint64_t)y * g_mode.width + x) * 4u;
     xfer.resource_id = VIRTIO_GPU_RESOURCE_ID;
-    if (gpu_cmd_nodata(&xfer, sizeof(xfer)) < 0)
-        return -1;
+    return gpu_cmd_nodata(&xfer, sizeof(xfer));
+}
+
+static int gpu_flush(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    virtio_gpu_resource_flush_t flush;
+
+    if (w == 0 || h == 0)
+        return 0;
 
     memset(&flush, 0, sizeof(flush));
     hdr_init(&flush.hdr, VIRTIO_GPU_CMD_RESOURCE_FLUSH);
-    flush.r = xfer.r;
+    flush.r.x = x;
+    flush.r.y = y;
+    flush.r.width = w;
+    flush.r.height = h;
     flush.resource_id = VIRTIO_GPU_RESOURCE_ID;
-    if (gpu_cmd_nodata(&flush, sizeof(flush)) < 0)
+    return gpu_cmd_nodata(&flush, sizeof(flush));
+}
+
+static int gpu_transfer_flush(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    if (gpu_transfer(x, y, w, h) < 0)
         return -1;
-    return 0;
+    return gpu_flush(x, y, w, h);
+}
+
+static void virtio_copy_rect(const uint32_t *src, uint32_t src_stride_px,
+                             uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    uint32_t row;
+
+    if (x >= g_mode.width || y >= g_mode.height || w == 0 || h == 0)
+        return;
+    if (x + w > g_mode.width)
+        w = g_mode.width - x;
+    if (y + h > g_mode.height)
+        h = g_mode.height - y;
+
+    for (row = 0; row < h; row++) {
+        memcpy(g_fb + (y + row) * g_mode.width + x,
+               src + (y + row) * src_stride_px + x,
+               w * 4);
+    }
 }
 
 static int virtio_get_mode(display_mode_t *out)
@@ -251,7 +284,6 @@ static int virtio_present(const uint32_t *src, uint32_t src_stride_px)
 static int virtio_present_rect(const uint32_t *src, uint32_t src_stride_px,
                                uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
-    uint32_t row;
     if (!g_ready || !src || !g_fb || w == 0 || h == 0)
         return -1;
     if (x >= g_mode.width || y >= g_mode.height)
@@ -261,12 +293,85 @@ static int virtio_present_rect(const uint32_t *src, uint32_t src_stride_px,
     if (y + h > g_mode.height)
         h = g_mode.height - y;
 
-    for (row = 0; row < h; row++) {
-        memcpy(g_fb + (y + row) * g_mode.width + x,
-               src + (y + row) * src_stride_px + x,
-               w * 4);
-    }
+    virtio_copy_rect(src, src_stride_px, x, y, w, h);
     return gpu_transfer_flush(x, y, w, h);
+}
+
+/*
+ * Drag path: memcpy all damage rects into guest fb, then either one fat
+ * TRANSFER of the bbox (small moves) or per-rect TRANSFERs when the bbox
+ * is sparse — always a single RESOURCE_FLUSH.
+ */
+static int virtio_present_rects(const uint32_t *src, uint32_t src_stride_px,
+                                const display_rect_t *rects, uint32_t n)
+{
+    uint32_t i;
+    uint32_t bx = 0, by = 0, bx2 = 0, by2 = 0;
+    uint64_t sum_area = 0;
+    uint64_t box_area;
+    int have = 0;
+
+    if (!g_ready || !src || !g_fb || !rects || n == 0)
+        return -1;
+
+    for (i = 0; i < n; i++) {
+        uint32_t x = rects[i].x, y = rects[i].y, w = rects[i].w, h = rects[i].h;
+        if (w == 0 || h == 0)
+            continue;
+        if (x >= g_mode.width || y >= g_mode.height)
+            continue;
+        if (x + w > g_mode.width)
+            w = g_mode.width - x;
+        if (y + h > g_mode.height)
+            h = g_mode.height - y;
+        if (w == 0 || h == 0)
+            continue;
+
+        virtio_copy_rect(src, src_stride_px, x, y, w, h);
+        sum_area += (uint64_t)w * (uint64_t)h;
+        if (!have) {
+            bx = x;
+            by = y;
+            bx2 = x + w;
+            by2 = y + h;
+            have = 1;
+        } else {
+            if (x < bx)
+                bx = x;
+            if (y < by)
+                by = y;
+            if (x + w > bx2)
+                bx2 = x + w;
+            if (y + h > by2)
+                by2 = y + h;
+        }
+    }
+
+    if (!have)
+        return 0;
+
+    box_area = (uint64_t)(bx2 - bx) * (uint64_t)(by2 - by);
+
+    /* Sparse damage (large jump): transfer only the real rects. */
+    if (n > 1 && box_area > sum_area * 2u) {
+        for (i = 0; i < n; i++) {
+            uint32_t x = rects[i].x, y = rects[i].y, w = rects[i].w, h = rects[i].h;
+            if (w == 0 || h == 0)
+                continue;
+            if (x >= g_mode.width || y >= g_mode.height)
+                continue;
+            if (x + w > g_mode.width)
+                w = g_mode.width - x;
+            if (y + h > g_mode.height)
+                h = g_mode.height - y;
+            if (gpu_transfer(x, y, w, h) < 0)
+                return -1;
+        }
+    } else if (gpu_transfer(bx, by, bx2 - bx, by2 - by) < 0) {
+        return -1;
+    }
+
+    return gpu_flush(bx, by, bx2 - bx, by2 - by);
 }
 
 static int virtio_gpu_submit(const void *cmd, uint32_t size)
@@ -350,6 +455,7 @@ static int virtio_drv_init(driver_t *drv, void *ctx)
     g_ops.get_mode = virtio_get_mode;
     g_ops.present = virtio_present;
     g_ops.present_rect = virtio_present_rect;
+    g_ops.present_rects = virtio_present_rects;
     g_ops.gpu_submit = virtio_gpu_submit;
 
     if (!g_device_present) {

@@ -15,12 +15,23 @@ typedef struct display_mode {
     uint32_t bytes_per_pixel;
 } display_mode_t;
 
+typedef struct display_rect {
+    uint32_t x, y, w, h;
+} display_rect_t;
+
 typedef struct display_ops {
     const char *name;
     int (*get_mode)(display_mode_t *out);
     int (*present)(const uint32_t *src, uint32_t src_stride_px);
     int (*present_rect)(const uint32_t *src, uint32_t src_stride_px,
                          uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    /*
+     * Optional batch present: copy N rects then one host flush.
+     * Used by drag to avoid N sync TRANSFER+FLUSH round-trips.
+     * NULL = caller falls back to present_rect per region.
+     */
+    int (*present_rects)(const uint32_t *src, uint32_t src_stride_px,
+                         const display_rect_t *rects, uint32_t n);
     /* Optional GPU submit path (virtio). NULL = software only. */
     int (*gpu_submit)(const void *cmd, uint32_t size);
 } display_ops_t;

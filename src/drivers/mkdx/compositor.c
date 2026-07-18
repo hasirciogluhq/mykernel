@@ -322,7 +322,7 @@ static void blit_layer(gx_surface *bb, gx_layer *L, uint8_t opacity, gx_rect cli
         if (sy < 0 || (uint32_t)sy >= bb->height || (uint32_t)y >= src->height)
             continue;
 
-        if ((y & 31) == 0)
+        if ((y & 31) == 0 && s_drag_fast_layer < 0)
             ps2_poll();
 
         /* Corner bands only — middle rows are fully opaque (round_span = full). */
@@ -578,9 +578,13 @@ static void drag_blit_layer(gx_surface *dst, gx_layer *L, gx_rect clip)
 
     if (!L || !L->surface)
         return;
-    /* Skip acrylic rebuild; keep corner_radius so the mask stays correct. */
+    /*
+     * Drag preview: opaque row memcpy, sharp corners (no AA).
+     * Corner mask rebuild every hop was wasting fill on the hot path.
+     */
     tmp = *L;
     tmp.style = GX_LAYER_OPAQUE;
+    tmp.corner_radius = 0;
     blit_layer(dst, &tmp, 255, clip);
 }
 
@@ -662,12 +666,124 @@ static int drag_ensure_underlay(uint32_t w, uint32_t h)
     return s_drag_under ? 0 : -1;
 }
 
+static void copy_under_strip_to_bb(gx_surface *bb, gx_rect win,
+                                   const gx_surface *tile,
+                                   int32_t lx, int32_t ly, int32_t lw, int32_t lh)
+{
+    gx_rect r;
+
+    if (lw <= 0 || lh <= 0)
+        return;
+    r = gx_rect_make(win.x + lx, win.y + ly, lw, lh);
+    if (gx_rect_empty(r))
+        return;
+    /* tile rows are window-local; copy_rect_to_bb expects tile origin at 0. */
+    {
+        int32_t y;
+        int32_t x0 = r.x;
+        int32_t w = r.w;
+        if (x0 < 0) {
+            w += x0;
+            lx -= x0;
+            x0 = 0;
+        }
+        if (x0 + w > (int32_t)bb->width)
+            w = (int32_t)bb->width - x0;
+        if (w <= 0 || lx < 0 || ly < 0)
+            return;
+        for (y = 0; y < lh; y++) {
+            int32_t dy = r.y + y;
+            int32_t sy = ly + y;
+            if (dy < 0 || (uint32_t)dy >= bb->height)
+                continue;
+            if ((uint32_t)sy >= tile->height)
+                continue;
+            if ((uint32_t)(lx + w) > tile->width)
+                break;
+            memcpy(&bb->pixels[(uint32_t)dy * bb->stride + (uint32_t)x0],
+                   &tile->pixels[(uint32_t)sy * tile->stride + (uint32_t)lx],
+                   (size_t)w * sizeof(gx_color));
+        }
+    }
+}
+
+static void capture_under_strip(gx_surface *tile, const gx_surface *bb, gx_rect win,
+                                int32_t lx, int32_t ly, int32_t lw, int32_t lh)
+{
+    int32_t y;
+    int32_t x0, w;
+
+    if (!tile || !bb || lw <= 0 || lh <= 0 || lx < 0 || ly < 0)
+        return;
+    if ((uint32_t)(lx + lw) > tile->width || (uint32_t)(ly + lh) > tile->height)
+        return;
+
+    x0 = win.x + lx;
+    w = lw;
+    if (x0 < 0) {
+        w += x0;
+        lx -= x0;
+        x0 = 0;
+    }
+    if (x0 + w > (int32_t)bb->width)
+        w = (int32_t)bb->width - x0;
+    if (w <= 0)
+        return;
+
+    for (y = 0; y < lh; y++) {
+        int32_t sy = win.y + ly + y;
+        if (sy < 0 || (uint32_t)sy >= bb->height)
+            continue;
+        memcpy(&tile->pixels[(uint32_t)(ly + y) * tile->stride + (uint32_t)lx],
+               &bb->pixels[(uint32_t)sy * bb->stride + (uint32_t)x0],
+               (size_t)w * sizeof(gx_color));
+    }
+}
+
+static void underlay_scroll(gx_surface *tile, int32_t dx, int32_t dy,
+                            int32_t w, int32_t h)
+{
+    int32_t y;
+
+    if (!tile || (dx == 0 && dy == 0))
+        return;
+
+    /* Scroll stored underlay so overlap stays valid without full recapture. */
+    if (dy > 0) {
+        for (y = 0; y < h - dy; y++)
+            memmove(&tile->pixels[(uint32_t)y * tile->stride],
+                    &tile->pixels[(uint32_t)(y + dy) * tile->stride],
+                    (size_t)w * sizeof(gx_color));
+    } else if (dy < 0) {
+        int32_t ady = -dy;
+        for (y = h - ady - 1; y >= 0; y--)
+            memmove(&tile->pixels[(uint32_t)(y + ady) * tile->stride],
+                    &tile->pixels[(uint32_t)y * tile->stride],
+                    (size_t)w * sizeof(gx_color));
+    }
+
+    if (dx > 0) {
+        for (y = 0; y < h; y++)
+            memmove(&tile->pixels[(uint32_t)y * tile->stride],
+                    &tile->pixels[(uint32_t)y * tile->stride + (uint32_t)dx],
+                    (size_t)(w - dx) * sizeof(gx_color));
+    } else if (dx < 0) {
+        int32_t adx = -dx;
+        for (y = 0; y < h; y++)
+            memmove(&tile->pixels[(uint32_t)y * tile->stride + (uint32_t)adx],
+                    &tile->pixels[(uint32_t)y * tile->stride],
+                    (size_t)(w - adx) * sizeof(gx_color));
+    }
+}
+
 void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,
                               gx_rect old_r, gx_rect new_r, int layer_id)
 {
     gx_layer *L;
     gx_rect screen;
+    gx_rect inter;
     int was_vis;
+    int32_t dx, dy;
 
     if (!c || !dst || !dst->pixels)
         return;
@@ -717,8 +833,60 @@ void gx_compositor_drag_slide(gx_compositor *c, gx_surface *dst,
         return;
     }
 
-    copy_rect_to_bb(dst, old_r, s_drag_under);
-    copy_rect_from_bb(s_drag_under, dst, new_r);
+    dx = new_r.x - old_r.x;
+    dy = new_r.y - old_r.y;
+    inter = gx_rect_intersect(old_r, new_r);
+
+    /* Disjoint jump: full restore + capture (rare during coalesced drag). */
+    if (gx_rect_empty(inter)) {
+        copy_rect_to_bb(dst, old_r, s_drag_under);
+        copy_rect_from_bb(s_drag_under, dst, new_r);
+        drag_blit_layer(dst, L, new_r);
+        return;
+    }
+
+    /*
+     * Overlapping move: restore only exposed strips, scroll underlay,
+     * capture newly covered strips, blit opaque window (C03).
+     */
+    if (dy > 0)
+        copy_under_strip_to_bb(dst, old_r, s_drag_under, 0, 0, old_r.w, dy);
+    else if (dy < 0)
+        copy_under_strip_to_bb(dst, old_r, s_drag_under, 0, old_r.h + dy,
+                               old_r.w, -dy);
+
+    if (dx > 0) {
+        int32_t y0 = dy > 0 ? dy : 0;
+        int32_t y1 = dy < 0 ? old_r.h + dy : old_r.h;
+        if (y1 > y0)
+            copy_under_strip_to_bb(dst, old_r, s_drag_under, 0, y0, dx, y1 - y0);
+    } else if (dx < 0) {
+        int32_t y0 = dy > 0 ? dy : 0;
+        int32_t y1 = dy < 0 ? old_r.h + dy : old_r.h;
+        if (y1 > y0)
+            copy_under_strip_to_bb(dst, old_r, s_drag_under, old_r.w + dx, y0,
+                                   -dx, y1 - y0);
+    }
+
+    underlay_scroll(s_drag_under, dx, dy, new_r.w, new_r.h);
+
+    if (dy > 0)
+        capture_under_strip(s_drag_under, dst, new_r, 0, new_r.h - dy, new_r.w, dy);
+    else if (dy < 0)
+        capture_under_strip(s_drag_under, dst, new_r, 0, 0, new_r.w, -dy);
+
+    if (dx > 0) {
+        int32_t y0 = dy < 0 ? -dy : 0;
+        int32_t y1 = dy > 0 ? new_r.h - dy : new_r.h;
+        if (y1 > y0)
+            capture_under_strip(s_drag_under, dst, new_r, new_r.w - dx, y0, dx, y1 - y0);
+    } else if (dx < 0) {
+        int32_t y0 = dy < 0 ? -dy : 0;
+        int32_t y1 = dy > 0 ? new_r.h - dy : new_r.h;
+        if (y1 > y0)
+            capture_under_strip(s_drag_under, dst, new_r, 0, y0, -dx, y1 - y0);
+    }
+
     drag_blit_layer(dst, L, new_r);
 }
 
@@ -784,10 +952,11 @@ void gx_compositor_compose_rect(gx_compositor *c, gx_surface *dst, gx_rect clip)
         if (gx_rect_empty(gx_rect_intersect(L->bounds, clip)))
             continue;
 
-        /* Drag preview: no frost rebuild — opaque slide with corner mask (C03). */
+        /* Drag preview: no frost rebuild — opaque sharp blit (C03). */
         if (ids[i] == s_drag_fast_layer) {
             gx_layer tmp = *L;
             tmp.style = GX_LAYER_OPAQUE;
+            tmp.corner_radius = 0;
             blit_layer(dst, &tmp, 255, clip);
             continue;
         }

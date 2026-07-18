@@ -204,6 +204,83 @@ static void present_rect(gx_server *s, int32_t x, int32_t y, int32_t w, int32_t 
         ops->present(bb->pixels, bb->stride);
 }
 
+#define PRESENT_BATCH_MAX 8
+
+static void present_rect_list(gx_server *s, const gx_rect *rs, int n)
+{
+    display_ops_t *ops = display_active();
+    gx_surface *bb;
+    display_rect_t dr[PRESENT_BATCH_MAX];
+    int i, m;
+
+    if (!s || !rs || n <= 0 || !ops)
+        return;
+    bb = s->device.backbuffer;
+    if (!bb)
+        return;
+
+    m = 0;
+    for (i = 0; i < n && m < PRESENT_BATCH_MAX; i++) {
+        int32_t x = rs[i].x, y = rs[i].y, w = rs[i].w, h = rs[i].h;
+        clamp_cursor_rect(&x, &y, &w, &h, bb->width, bb->height);
+        if (w <= 0 || h <= 0)
+            continue;
+        dr[m].x = (uint32_t)x;
+        dr[m].y = (uint32_t)y;
+        dr[m].w = (uint32_t)w;
+        dr[m].h = (uint32_t)h;
+        m++;
+    }
+    if (m == 0)
+        return;
+
+    if (ops->present_rects) {
+        ops->present_rects(bb->pixels, bb->stride, dr, (uint32_t)m);
+        return;
+    }
+    for (i = 0; i < m; i++)
+        present_rect(s, (int32_t)dr[i].x, (int32_t)dr[i].y,
+                     (int32_t)dr[i].w, (int32_t)dr[i].h);
+}
+
+/*
+ * Drag scanout damage: never present a multi-hop trail AABB.
+ * Small moves → one union rect; large jumps → old + new (+ cursor).
+ */
+static void present_drag_damage(gx_server *s, gx_rect old_r, gx_rect new_r,
+                                int32_t mx, int32_t my)
+{
+    gx_rect cur = gx_rect_make(mx, my, CURSOR_W, CURSOR_H);
+    gx_rect uni, inter;
+    gx_rect rs[4];
+    int n = 0;
+    int32_t a_uni, a_parts;
+
+    uni = gx_rect_union(old_r, new_r);
+    uni = gx_rect_union(uni, cur);
+    if (gx_rect_empty(uni))
+        return;
+
+    inter = gx_rect_intersect(old_r, new_r);
+    a_uni = gx_rect_area(uni);
+    a_parts = gx_rect_area(old_r) + gx_rect_area(new_r) - gx_rect_area(inter)
+              + gx_rect_area(cur);
+
+    /* Union is tight enough (typical small pointer hops). */
+    if (a_uni <= a_parts + (a_parts >> 2)) {
+        present_rect(s, uni.x, uni.y, uni.w, uni.h);
+        return;
+    }
+
+    if (!gx_rect_empty(old_r))
+        rs[n++] = old_r;
+    if (!gx_rect_empty(new_r))
+        rs[n++] = new_r;
+    if (!gx_rect_empty(cur))
+        rs[n++] = cur;
+    present_rect_list(s, rs, n);
+}
+
 static void pending_mark_full(void)
 {
     g_pending_dirty = 1;
@@ -644,8 +721,8 @@ static void present_full_frame(gx_server *s, display_ops_t *ops,
 }
 
 /*
- * Live drag: sprite slide with cursor erased from bb before every capture.
- * Apply latest pointer once, then one union present (old∪new∪cursor).
+ * Live drag: one coalesced slide to the pointer tip, then a tight present.
+ * Multi-hop trail unions were presenting a path AABB every frame (~1 FPS).
  */
 static int frame_tick_drag(gx_server *s, display_ops_t *ops)
 {
@@ -653,11 +730,9 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
     gx_surface *bb = s->device.backbuffer;
     gx_rect old_r;
     gx_rect new_r;
-    gx_rect present_u;
     wm_window *dw;
     int layer_id = -1;
     int32_t mx, my;
-    int hops;
 
     if (!bb || !ops)
         return -1;
@@ -670,59 +745,63 @@ static int frame_tick_drag(gx_server *s, display_ops_t *ops)
     /* Cursor off bb before underlay capture — otherwise ghosts bake into drag. */
     cursor_erase_from_bb(s);
 
-    present_u = gx_rect_make(0, 0, 0, 0);
-    g_frame_busy = 1;
-
     /*
-     * Catch up to the tip: slide every hop in the backbuffer, but only track
-     * first-old ∪ last-new for a single LFB present (avoids 2–3× memcpy).
+     * Coalesce to the latest pointer once, then a single slide.
+     * Mid-slide poll+hop loops ballooned present damage across the trail.
      */
-    for (hops = 0; hops < 8; hops++) {
-        if (!g_drag_damage || layer_id < 0)
-            break;
-
-        old_r = g_drag_old;
-        new_r = g_drag_new;
-        g_drag_damage = 0;
-
-        if (gx_rect_empty(present_u))
-            present_u = old_r;
-        else
-            present_u = gx_rect_union(present_u, old_r);
-        present_u = gx_rect_union(present_u, new_r);
-
-        gx_compositor_drag_slide(&s->comp, bb, old_r, new_r, layer_id);
-
-        /* Drain moves mid-slide without nested LFB presents. */
-        g_frame_busy = 0;
-        gx_server_poll_input();
-        flush_deferred_btn(s);
-        flush_deferred_move(s);
-        end_drag_if_released(s);
-        if (s->wm.drag_id < 0)
-            break;
-        g_frame_busy = 1;
-        sync_drag_fast_layer(s);
-        dw = wm_get(&s->wm, s->wm.drag_id);
-        layer_id = dw ? dw->layer_id : -1;
+    g_frame_busy = 0;
+    gx_server_poll_input();
+    flush_deferred_btn(s);
+    flush_deferred_move(s);
+    end_drag_if_released(s);
+    if (s->wm.drag_id < 0) {
+        /* Release during coalesce — fall through to normal dirty compose. */
+        if (g_tick_depth <= 3)
+            return gx_server_frame_tick();
+        return 0;
     }
+    if (!g_drag_damage) {
+        ms = mouse_get();
+        mx = ms ? ms->x : 0;
+        my = ms ? ms->y : 0;
+        cursor_paint_at(s, mx, my);
+        present_rect(s, mx, my, CURSOR_W, CURSOR_H);
+        return 0;
+    }
+
+    sync_drag_fast_layer(s);
+    dw = wm_get(&s->wm, s->wm.drag_id);
+    layer_id = dw ? dw->layer_id : -1;
+    if (layer_id < 0) {
+        g_drag_damage = 0;
+        return 0;
+    }
+
+    old_r = g_drag_old;
+    new_r = g_drag_new;
+    g_drag_damage = 0;
+
+    g_frame_busy = 1;
+    gx_compositor_drag_slide(&s->comp, bb, old_r, new_r, layer_id);
 
     ms = mouse_get();
     mx = ms ? ms->x : 0;
     my = ms ? ms->y : 0;
     cursor_paint_at(s, mx, my);
 
-    present_u = gx_rect_union(present_u, gx_rect_make(mx, my, CURSOR_W, CURSOR_H));
-    if (!gx_rect_empty(present_u))
-        present_rect(s, present_u.x, present_u.y, present_u.w, present_u.h);
+    present_drag_damage(s, old_r, new_r, mx, my);
 
     s->frame_seq++;
     g_frame_busy = 0;
 
+    /* Next moves wait for the following frame_tick — do not nest another slide. */
     gx_server_poll_input();
+    flush_deferred_btn(s);
+    flush_deferred_move(s);
+    end_drag_if_released(s);
     flush_pending_cursor(s);
     ms = mouse_get();
-    if (ms && (ms->x != mx || ms->y != my))
+    if (ms && (ms->x != mx || ms->y != my) && s->wm.drag_id < 0)
         flush_cursor_at(s, ms->x, ms->y);
 
     return 0;
