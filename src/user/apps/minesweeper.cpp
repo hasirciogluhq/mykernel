@@ -363,6 +363,17 @@ void paint()
     s.fill_round(nbx, nby, kNewBtnW, kNewBtnH, 6, t.accent);
     s.text(nbx + 16, nby + 6, "new", rgb(255, 255, 255), 1);
 
+    /* Board tray behind tiles — makes gaps read as separators. */
+    const int board_w = kCols * kCell + (kCols - 1) * kGap;
+    const int board_h = kRows * kCell + (kRows - 1) * kGap;
+    const int tray_pad = 6;
+    s.fill_round(kGridX - tray_pad, kGridY - tray_pad,
+                 board_w + tray_pad * 2, board_h + tray_pad * 2,
+                 10, t.sidebar);
+    s.fill_round(kGridX - tray_pad + 1, kGridY - tray_pad + 1,
+                 board_w + tray_pad * 2 - 2, board_h + tray_pad * 2 - 2,
+                 9, t.card);
+
     const int stride = kCell + kGap;
     for (int r = 0; r < kRows; r++) {
         for (int c = 0; c < kCols; c++) {
@@ -378,7 +389,9 @@ void paint()
             else if (vis == Flagged)
                 fill = t.accent_soft;
 
-            s.fill_round(x, y, kCell, kCell, 8, fill);
+            /* Outer border ring, then inner fill (1px stroke). */
+            s.fill_round(x, y, kCell, kCell, 8, t.border);
+            s.fill_round(x + 1, y + 1, kCell - 2, kCell - 2, 7, fill);
 
             if (vis == Flagged) {
                 draw_flag(s, cx, cy, t.text_dim, t.danger);

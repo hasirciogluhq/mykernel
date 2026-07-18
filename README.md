@@ -16,13 +16,17 @@ Boots. Paints windows. Runs ImGui for fun. Cool. Don't care. Doing it anyway.
 
 ## Showcase
 
-Desktop in the wild. Activity Monitor flexing next to ImGui. Sexy and we know it.
+Desktop in the wild. Activity Monitor flexing next to ImGui. Minesweeper because why not. Sexy and we know it.
 
-![hsrc-kernel desktop](assets/showcase/os-ui.png)
+<p align="center">
+  <img src="assets/showcase/os-ui.png" alt="hsrc-kernel desktop" width="32%" />
+  &nbsp;
+  <img src="assets/showcase/activity-mon-plus-imgui-demo.png" alt="Activity Monitor + ImGui Demo" width="32%" />
+  &nbsp;
+  <img src="assets/showcase/minesweeper.png" alt="Minesweeper on hsrc-kernel" width="32%" />
+</p>
 
-![Activity Monitor + ImGui Demo](assets/showcase/activity-mon-plus-imgui-demo.png)
-
-*Activity Monitor + ImGui demo on MKDX*
+<p align="center"><em>Desktop · Activity + ImGui · Minesweeper</em></p>
 
 ---
 
@@ -36,7 +40,7 @@ Stuff that actually exists in the tree — no LinkedIn buzzwords:
 - **Usermode processes** — C++17 apps packed as **`.mke`**, flat address space, syscalls
 - **Threading + sync** — `Thread`, kernel **Event**, **ConditionVariable** (block for real, don't spin on `yield(0)`)
 - **MKDX** — window/surface compositor (layers, acrylic blur, wallpaper, drag) as a loadable module
-- **Desktop stack** — `os-ui` dock/shell, terminal, files, settings, activity-monitor
+- **Desktop stack** — `os-ui` dock/shell, terminal, files, settings, activity-monitor, **minesweeper**
 - **ImGui rendering** — why not. Dear ImGui software-rasterized onto MKDX/ugx; display present is SW (BGA) or VirtIO-GPU scanout via PCI. Demo: `apps/imgui-demo`
 - **Driver modules (`.kmod`)** — packed into initrd; PCI, VGA, PS/2, VFS/block stack, …
 - **Virtio** — `virtio-blk` disk + `virtio-net` + DHCP / sockets
