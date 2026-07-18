@@ -452,6 +452,8 @@ bool upsert_ini_key(const char *key, const char *value)
     (void)hsrc::sdk::close(fd);
     if (wrote == (long)len) {
         g_ini_present = true;
+        if (strcmp(key, kAppearanceKey) == 0)
+            bump_theme_gen();
         return true;
     }
     return false;

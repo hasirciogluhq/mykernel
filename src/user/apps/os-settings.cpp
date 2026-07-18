@@ -34,6 +34,7 @@ using hsrc::sdk::settings::persist_key;
 using hsrc::sdk::settings::refresh_theme;
 using hsrc::sdk::settings::set_appearance;
 using hsrc::sdk::settings::theme;
+using hsrc::sdk::settings::kThemeWaitTicks;
 
 constexpr int kWinW = 860;
 constexpr int kWinH = 520;
@@ -50,7 +51,6 @@ constexpr int kSidebarRowStep = kSidebarRowH + 4;
 constexpr int kContentTop = ui_panel_body_top(2);
 constexpr int kContentBot = kWinH - 12;
 constexpr int kViewH = kContentBot - kContentTop;
-constexpr int kThemePollEvery = 96;
 
 constexpr const char *kIniPath = "/etc/os-settings.ini";
 constexpr const char *kDeepLinkPath = "/run/settings.deeplink";
@@ -156,7 +156,6 @@ WindowOptions g_win_opts;
 ScreenInfo g_screen{};
 Input g_prev_input{};
 bool g_dirty = true;
-int g_theme_poll = 0;
 int g_clock_poll = 0;
 int g_opts_poll = 0;
 char g_last_live_clock[32] = "";
@@ -1130,13 +1129,9 @@ extern "C" void mke_main(void)
         if (deeplink_nav)
             (void)refresh_window_options();
 
-        g_theme_poll++;
-        if (g_theme_poll >= kThemePollEvery) {
-            g_theme_poll = 0;
-            if (refresh_theme()) {
-                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
-                g_dirty = true;
-            }
+        if (refresh_theme()) {
+            g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+            g_dirty = true;
         }
 
         if (g_active_category == CAT_DATE_TIME) {
@@ -1158,7 +1153,7 @@ extern "C" void mke_main(void)
             (void)refresh_window_options();
         }
 
-        uint32_t wait_to = kGxWaitForever;
+        uint32_t wait_to = kThemeWaitTicks;
         if (g_win_opts.minimized)
             wait_to = 200u;
         else if (g_drag_slider >= 0 || g_drag_scroll)
@@ -1167,9 +1162,8 @@ extern "C" void mke_main(void)
             wait_to = 8u;
 
         Input in = g_gx.wait(wait_to);
-        const bool dragging = g_gx.dragging();
 
-        if (!dragging) {
+        {
             const uint8_t btn_delta = (uint8_t)(in.buttons ^ g_prev_input.buttons);
             if (btn_delta || in.wheel != 0) {
                 g_opts_poll = kOptsPollEvery;
@@ -1237,14 +1231,11 @@ extern "C" void mke_main(void)
             }
 
             g_prev_input = in;
-        } else {
-            g_prev_input = in;
         }
 
         if (deeplink_nav)
             g_dirty = true;
 
-        /* Dirty-gated paint — including during titlebar drag (live clock). */
         if ((!g_win_opts.minimized && g_dirty) || deeplink_nav) {
             (void)g_gx.begin_scene();
             paint();

@@ -34,6 +34,7 @@ using hsrc::sdk::kGxWaitForever;
 using hsrc::sdk::kChromeTitleH;
 using hsrc::sdk::settings::theme;
 using hsrc::sdk::settings::refresh_theme;
+using hsrc::sdk::settings::kThemeWaitTicks;
 
 constexpr int kWinW = 720;
 constexpr int kWinH = 440;
@@ -42,7 +43,6 @@ constexpr int kLineH = 20; /* matches UGX_FONT_H (18) + 2px leading */
 constexpr int kCols = 86;
 constexpr int kRows = 32;
 constexpr int kHist = 120;
-constexpr int kThemePollEvery = 96;
 
 Window g_win;
 GxDevice g_gx;
@@ -54,7 +54,6 @@ int g_nlines = 0;
 char g_cwd[VFS_PATH_MAX];
 char g_input[kCols];
 int g_inlen = 0;
-int g_theme_poll = 0;
 bool g_dirty = true;
 bool g_was_minimized = false;
 /* Line damage: -1 = full repaint; else first history index needing redraw. */
@@ -1500,20 +1499,17 @@ extern "C" void mke_main(void)
             hsrc::sdk::exit(0);
         }
 
-        g_theme_poll++;
-        if (g_theme_poll >= kThemePollEvery) {
-            g_theme_poll = 0;
-            if (refresh_theme()) {
-                g_damage_line = -1;
-                g_dirty = true;
-                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
-            }
+        if (refresh_theme()) {
+            g_damage_line = -1;
+            g_dirty = true;
+            g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
         }
 
         (void)refresh_window_options();
 
+        /* Short idle wait so theme gen / live content pick up within ~200ms. */
         const uint32_t wait_to =
-            g_win_opts.minimized ? 200u : kGxWaitForever;
+            g_win_opts.minimized ? 200u : kThemeWaitTicks;
         Input in = g_gx.wait(wait_to);
         const bool dragging = g_gx.dragging();
 
@@ -1539,7 +1535,7 @@ extern "C" void mke_main(void)
             g_prev_input = in;
         }
 
-        /* Dirty-gated paint — including during titlebar drag (live content). */
+        /* Dirty-gated paint (including while WM drags this window). */
         if (!g_win_opts.minimized && g_dirty) {
             (void)g_gx.begin_scene();
             paint();

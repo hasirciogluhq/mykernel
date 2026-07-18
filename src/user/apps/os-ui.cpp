@@ -37,6 +37,7 @@ using hsrc::sdk::settings::toggle_theme;
 using hsrc::sdk::settings::refresh_theme;
 using hsrc::sdk::settings::refresh_status;
 using hsrc::sdk::settings::status;
+using hsrc::sdk::settings::kThemeWaitTicks;
 
 constexpr int kMenubarH = 28;
 constexpr int kDockTrayH = 72;   /* acrylic tray body */
@@ -58,8 +59,7 @@ constexpr int kIniBytes = 2048;
 constexpr int kStatusIcon = 16;
 constexpr int kStatusGap = 12;
 constexpr int kStatusRightPad = 10;
-constexpr int kThemePollEvery = 96;
-constexpr int kStatusPollEvery = 160;
+constexpr int kStatusPollEvery = 8;
 
 constexpr Color kDesktop = rgb(48, 92, 140);
 constexpr Color kMenubarAccent = rgb(35, 131, 226);
@@ -139,7 +139,6 @@ int g_focus_id = -1;
 uint8_t g_prev_buttons = 0;
 int g_scan_tick = 0;
 int g_pin_tick = 0;
-int g_theme_poll = 0;
 int g_status_poll = 0;
 char g_clock_text[24] = "";
 
@@ -1042,7 +1041,13 @@ bool build_ui()
     dock_opts.acrylic = false;
     dock_opts.alpha = true;
     dock_opts.accept_focus = false;
-    dock_opts.topmost = true;
+    /*
+     * Not topmost: wm_focus → raise_topmost_windows would keep the dock above
+     * every app. Drag looks "above" only because compositor sprite-blits the
+     * grab; on release normal z-order put the window under the dock.
+     * Stacking: wallpaper < dock < app windows < menubar (menubar stays topmost).
+     */
+    dock_opts.topmost = false;
     dock_opts.set_title("dock");
     dock_opts.set_class_name("shell.dock");
     if (!g_dock.create(dock_opts))
@@ -1092,11 +1097,8 @@ extern "C" void mke_main(void)
         bool dirty_dock = false;
         bool dirty_menu = false;
 
-        if (++g_theme_poll >= kThemePollEvery) {
-            g_theme_poll = 0;
-            if (refresh_theme())
-                dirty_menu = true;
-        }
+        if (refresh_theme())
+            dirty_menu = true;
         if (++g_status_poll >= kStatusPollEvery) {
             g_status_poll = 0;
             if (refresh_status())
@@ -1181,9 +1183,9 @@ extern "C" void mke_main(void)
 
         /*
          * Shell watches all input (win=-1) for dock/menubar hover.
-         * Short timeout only while animating / clock / scan.
+         * Idle wait ~40ms so theme gen applies quickly; tighter while animating.
          */
-        uint32_t wait_to = 50u; /* ~0.5s clock/scan cadence when idle */
+        uint32_t wait_to = kThemeWaitTicks;
         if (animating() || g_hover >= 0 || g_menu_hover >= 0 || g_status_hover >= 0 ||
             g_mag_cursor_x >= 0)
             wait_to = 1u;

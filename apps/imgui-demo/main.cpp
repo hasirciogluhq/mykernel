@@ -25,10 +25,10 @@ using hsrc::sdk::kChromeTitleH;
 using hsrc::sdk::kGxWaitForever;
 using hsrc::sdk::settings::refresh_theme;
 using hsrc::sdk::settings::theme;
+using hsrc::sdk::settings::kThemeWaitTicks;
 
 constexpr int kWinW = 720;
 constexpr int kWinH = 480;
-constexpr int kThemePollEvery = 240;
 
 Window g_win;
 GxDevice g_gx;
@@ -39,7 +39,6 @@ int g_clicks = 0;
 bool g_imgui_ready = false;
 bool g_dirty = true;
 bool g_was_minimized = false;
-int g_theme_poll = 0;
 
 bool refresh_window_options()
 {
@@ -182,20 +181,16 @@ extern "C" void mke_main(void)
             hsrc::sdk::exit(0);
         }
 
-        g_theme_poll++;
-        if (g_theme_poll >= kThemePollEvery) {
-            g_theme_poll = 0;
-            if (refresh_theme()) {
-                apply_imgui_theme();
-                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
-                g_dirty = true;
-            }
+        if (refresh_theme()) {
+            apply_imgui_theme();
+            g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+            g_dirty = true;
         }
 
         (void)refresh_window_options();
 
         const uint32_t wait_to =
-            g_win_opts.minimized ? 200u : kGxWaitForever;
+            g_win_opts.minimized ? 200u : kThemeWaitTicks;
         Input in = g_gx.wait(wait_to);
         const bool dragging = g_gx.dragging();
 
@@ -208,7 +203,6 @@ extern "C" void mke_main(void)
         const bool input_relevant =
             !dragging && (now_relevant || was_relevant);
 
-        if (!dragging) {
             ImGui_ImplUgx_NewFrame(g_win, in, g_win_opts, g_prev.buttons,
                                    kChromeTitleH);
             ImGui::NewFrame();
@@ -236,13 +230,10 @@ extern "C" void mke_main(void)
 
             ImGui::Render();
             g_prev = in;
-        } else {
-            g_prev = in;
-        }
 
         /*
          * Present when dirty or (non-drag) meaningful input.
-         * Avoids idle mouse-on-other-window and drag-hop republish storms.
+         * Dirty gate still applies during WM drag (kernel updates front).
          */
         if (!g_win_opts.minimized && (g_dirty || input_relevant)) {
             (void)g_gx.begin_scene();

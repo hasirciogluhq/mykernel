@@ -52,7 +52,6 @@ constexpr int kColTicks = 548;
 /* User stacks are 8KiB — keep snapshot buffers in BSS, not on the stack. */
 constexpr int kMaxEntries = 96;
 constexpr int kStatusChars = 128;
-constexpr int kThemePollEvery = 240;
 /* ~2.5 Hz sample cadence (mono time, not per-yield). */
 constexpr uint64_t kSampleIntervalNs = 400000000ull;
 
@@ -83,7 +82,6 @@ bool g_has_selected_stat = false;
 bool g_dirty = true;
 bool g_was_minimized = false;
 bool g_need_sample = true;
-int g_theme_poll = 0;
 uint32_t g_last_applied_seq = 0;
 uint32_t g_last_applied_gen = 0;
 uint64_t g_last_sample_ns = 0;
@@ -685,22 +683,16 @@ extern "C" void mke_main(void)
             hsrc::sdk::exit(0);
         }
 
-        g_theme_poll++;
-        if (g_theme_poll >= kThemePollEvery) {
-            g_theme_poll = 0;
-            if (refresh_theme()) {
-                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
-                g_dirty = true;
-            }
+        if (refresh_theme()) {
+            g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+            g_dirty = true;
         }
 
         (void)refresh_window_options();
 
-        uint32_t wait_to = kGxWaitForever;
+        uint32_t wait_to = kThemeWaitTicks;
         if (g_win_opts.minimized)
             wait_to = 200u;
-        else
-            wait_to = 40u;
 
         Input in = g_gx.wait(wait_to);
         const bool dragging = g_gx.dragging();
@@ -732,7 +724,6 @@ extern "C" void mke_main(void)
                     g_dirty = true;
             }
 
-            /* Dirty-gated paint — including during titlebar drag (live counters). */
             if (g_dirty) {
                 (void)g_gx.begin_scene();
                 paint();

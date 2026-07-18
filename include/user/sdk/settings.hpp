@@ -59,8 +59,15 @@ bool set_appearance(Appearance appearance);
 /* Toggle Light ↔ Dark (Auto becomes Dark). */
 bool toggle_theme();
 
-/* Re-read theme when /run/os-theme.gen advances (cheap; safe every frame). */
+/*
+ * Re-read theme when /run/os-theme.gen advances (cheap; safe every frame).
+ * Call once per loop; pair with kThemeWaitTicks so idle apps observe changes
+ * within a few hundred ms even without input.
+ */
 bool refresh_theme();
+
+/* Idle SYS_INPUT_WAIT budget (~40ms at 100Hz PIT) for theme/status polls. */
+constexpr uint32_t kThemeWaitTicks = 4;
 
 /* Placeholder status for menubar indicators (ini stubs until real drivers). */
 struct StatusInfo {

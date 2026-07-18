@@ -29,6 +29,7 @@ using hsrc::sdk::ui_panel_text_y;
 using hsrc::sdk::ui_text_inset_y;
 using hsrc::sdk::settings::theme;
 using hsrc::sdk::settings::refresh_theme;
+using hsrc::sdk::settings::kThemeWaitTicks;
 
 constexpr int kWinW = 720;
 constexpr int kWinH = 460;
@@ -38,7 +39,6 @@ constexpr int kVisibleRows = 14;
 constexpr int kListY = ui_panel_body_top(2);
 constexpr int kMaxEntries = 96;
 constexpr int kStatusChars = 120;
-constexpr int kThemePollEvery = 96;
 
 struct Entry {
     char name[64];
@@ -55,7 +55,6 @@ Entry g_entries[kMaxEntries];
 int g_entry_count = 0;
 int g_selected = -1;
 int g_scroll = 0;
-int g_theme_poll = 0;
 bool g_dirty = true;
 bool g_was_minimized = false;
 char g_cwd[VFS_PATH_MAX];
@@ -438,19 +437,15 @@ extern "C" void mke_main(void)
             hsrc::sdk::exit(0);
         }
 
-        g_theme_poll++;
-        if (g_theme_poll >= kThemePollEvery) {
-            g_theme_poll = 0;
-            if (refresh_theme()) {
-                g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
-                g_dirty = true;
-            }
+        if (refresh_theme()) {
+            g_gx.set_chrome_colors(theme().chrome, theme().text, theme().border);
+            g_dirty = true;
         }
 
         (void)refresh_window_options();
 
         const uint32_t wait_to =
-            g_win_opts.minimized ? 200u : kGxWaitForever;
+            g_win_opts.minimized ? 200u : kThemeWaitTicks;
         Input in = g_gx.wait(wait_to);
         const bool dragging = g_gx.dragging();
 
